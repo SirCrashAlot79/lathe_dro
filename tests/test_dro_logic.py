@@ -10,6 +10,7 @@ from lathe_dro_pro import (
     parse_serial_packet,
     recommend_spindle_step,
     read_serial_packets,
+    request_system_poweroff,
     round_to_precision,
     save_tool_touch_positions,
     shoulder_distance,
@@ -177,6 +178,35 @@ def test_boring_x_reference_survives_calibrated_tool_change():
     current = tool_corrected_x_count(2000 + 500 + 2540, 2, positions)
     assert current - start == 2540
     assert boring_hole_diameter(0.5, start, current) == pytest.approx(0.7)
+
+
+def test_poweroff_requests_systemctl_without_prompt(monkeypatch):
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return Result()
+
+    monkeypatch.setattr("lathe_dro_pro.subprocess.run", fake_run)
+
+    assert request_system_poweroff() == (True, "")
+    assert calls[0][0] == ["sudo", "-n", "/usr/bin/systemctl", "poweroff"]
+
+
+def test_poweroff_reports_missing_authorization(monkeypatch):
+    class Result:
+        returncode = 1
+        stdout = ""
+        stderr = "a password is required"
+
+    monkeypatch.setattr("lathe_dro_pro.subprocess.run", lambda *args, **kwargs: Result())
+
+    assert request_system_poweroff() == (False, "a password is required")
 
 
 def test_tool_corrected_x_requires_tool_offset():

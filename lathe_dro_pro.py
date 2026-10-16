@@ -2,6 +2,7 @@ import argparse
 import json
 import math
 from pathlib import Path
+import subprocess
 import sys
 import pygame
 import serial
@@ -189,6 +190,7 @@ STATE_THREAD = 5
 STATE_SPEED = 6
 STATE_COORD = 7
 STATE_BORING = 8
+STATE_POWER_CONFIRM = 9
 BOOT_DURATION_MS = 2500
 current_state = STATE_BOOT
 
@@ -346,6 +348,22 @@ def boring_hole_diameter(initial_diameter, initial_x_counts, current_x_counts,
     return initial_diameter + diameter_increase
 
 
+def request_system_poweroff():
+    try:
+        result = subprocess.run(
+            ["sudo", "-n", "/usr/bin/systemctl", "poweroff"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return False, str(error)
+    if result.returncode != 0:
+        message = (result.stderr or result.stdout or "Power-off request was denied.").strip()
+        return False, message[:160]
+    return True, ""
+
+
 def bolt_circle_coordinates(pitch_circle_diameter, hole_count, start_angle_degrees=0):
     values = (pitch_circle_diameter, start_angle_degrees)
     if not all(math.isfinite(value) for value in values):
@@ -368,12 +386,18 @@ btn_w = int(width * 0.11)
 btn_h = int(height * 0.12)
 col1_x = panel_x + 10
 col2_x = panel_x + btn_w + 20
+header_button_gap = 8
+header_button_width = max(70, int((width - panel_x - 30 - 2 * header_button_gap) / 3))
+header_button_start = panel_x + 10
+header_button_y = 20
+header_button_height = 54
 
 main_buttons = {
     "TURNING": pygame.Rect(40, 20, 230, 54),
     "BORING": pygame.Rect(282, 20, 230, 54),
-    "DIA":     pygame.Rect(col1_x, int(height*0.02), btn_w, btn_h),
-    "INCH/MM": pygame.Rect(col2_x, int(height*0.02), btn_w, btn_h),
+    "DIA": pygame.Rect(header_button_start, header_button_y, header_button_width, header_button_height),
+    "INCH/MM": pygame.Rect(header_button_start + header_button_width + header_button_gap, header_button_y, header_button_width, header_button_height),
+    "POWER": pygame.Rect(header_button_start + 2 * (header_button_width + header_button_gap), header_button_y, header_button_width, header_button_height),
     "ZERO_X":  pygame.Rect(col1_x, int(height*0.16), btn_w, btn_h),
     "ABS/INC": pygame.Rect(col2_x, int(height*0.16), btn_w, btn_h),
     "ZERO_Z":  pygame.Rect(col1_x, int(height*0.30), btn_w, btn_h),
@@ -412,6 +436,11 @@ setup_buttons = {
     "COMP_Z_UP":  pygame.Rect(50, 450, 140, 60),
     "COMP_Z_DN":  pygame.Rect(210, 450, 140, 60),
     "BACK_MAIN":  pygame.Rect(width - 350, height - 120, 300, 80)
+}
+
+power_confirm_buttons = {
+    "CANCEL": pygame.Rect(width // 2 - 260, int(height * 0.62), 220, 80),
+    "CONFIRM": pygame.Rect(width // 2 + 40, int(height * 0.62), 260, 80)
 }
 
 tool_setup_buttons = {
@@ -494,6 +523,7 @@ coord_buttons = {
 serial_connection = None
 serial_buffer = ""
 connection_status = "Disconnected"
+poweroff_status = ""
 if __name__ == "__main__":
     DEMO_MODE = arguments.demo
     if DEMO_MODE:
@@ -564,10 +594,36 @@ while running:
             pygame.draw.rect(screen, GREY, (bar_x, bar_y, bar_width, bar_height), border_radius=2)
             fill_width = int(bar_width * elapsed_ms / BOOT_DURATION_MS)
             pygame.draw.rect(screen, CYAN, (bar_x, bar_y, fill_width, bar_height), border_radius=2)
+    elif current_state == STATE_POWER_CONFIRM:
+        if clicked:
+            if power_confirm_buttons["CONFIRM"].collidepoint(pos):
+                poweroff_succeeded, poweroff_status = request_system_poweroff()
+                if poweroff_succeeded:
+                    running = False
+            elif power_confirm_buttons["CANCEL"].collidepoint(pos):
+                current_state = STATE_MAIN_DRO
+
+        draw_industrial_background(screen, width, height)
+        prompt = font_medium.render("SHUT DOWN COMPUTER?", True, YELLOW)
+        screen.blit(prompt, prompt.get_rect(center=(width // 2, int(height * 0.40))))
+        detail = font_small.render("The DRO will close and Ubuntu will power off.", True, WHITE)
+        screen.blit(detail, detail.get_rect(center=(width // 2, int(height * 0.49))))
+        if poweroff_status:
+            error_text = font_small.render(poweroff_status, True, RED)
+            screen.blit(error_text, error_text.get_rect(center=(width // 2, int(height * 0.56))))
+        for key, label, color in (("CANCEL", "CANCEL", MED_GREY), ("CONFIRM", "SHUT DOWN", RED)):
+            rect = power_confirm_buttons[key]
+            pygame.draw.rect(screen, color, rect)
+            pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
+            text = font_small.render(label, True, WHITE)
+            screen.blit(text, text.get_rect(center=rect.center))
+
     elif current_state == STATE_MAIN_DRO:
         # --- MAIN READOUT DISPLAY SCREEN LOGIC ---
         if clicked:
-            if main_buttons["SETUP"].collidepoint(pos):
+            if main_buttons["POWER"].collidepoint(pos):
+                current_state = STATE_POWER_CONFIRM
+            elif main_buttons["SETUP"].collidepoint(pos):
                 current_state = STATE_SETUP_MENU  # SWAP THE SCREEN STATE HERE
             elif main_buttons["TURNING"].collidepoint(pos):
                 operation_mode = "TURNING"
@@ -649,7 +705,7 @@ while running:
             elif btn_name == "DIA": b_color, t_color = YELLOW, BLACK
             elif btn_name == "INCH/MM": b_color, t_color = MAGENTA, BLACK
             elif btn_name == "ABS/INC": b_color, t_color = CYAN, BLACK
-            elif btn_name in ("SETUP", "TOOL_SETUP"): b_color, t_color = RED, WHITE
+            elif btn_name in ("SETUP", "TOOL_SETUP", "POWER"): b_color, t_color = RED, WHITE
             
             pygame.draw.rect(screen, b_color, rect)
             pygame.draw.rect(screen, LIGHT_GREY, rect, 2)

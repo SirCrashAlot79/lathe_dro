@@ -55,6 +55,7 @@ For a windowed demo without the Pico:
 - `COORD` calculates a midpoint, shoulder-to-shoulder distance, or up to 24 bolt-circle coordinates relative to the pattern center. Bolt-circle start angle is measured counterclockwise from +X.
 - `TOOL SET` stores touch-off offsets in `tool_offsets.json` beside the Python app.
 - `BORING` accepts the initial drilled diameter, captures the live X position at that starting bore size, and adds twice the calibrated radial X travel to display the estimated current bore diameter. Choose whether X+ or X- increases diameter to match the installed scale. Capture is disabled in demo mode.
+- `POWER` asks for confirmation, then requests Ubuntu power-off. It does not stop the lathe. On Ubuntu, grant only the required command with `sudo visudo -f /etc/sudoers.d/lathe-dro-poweroff` and add `YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff`.
 
 For BORING, enter the measured starting hole diameter, position the boring tool at the starting bore wall, and capture X. Bore outward to track the estimated diameter. Select the X direction that makes the estimate increase as the tool moves outward, and verify finished sizes with a bore gauge; this is an estimate from scale travel, not a direct bore measurement. The baseline carries across tool changes only when both tools have saved X offsets; otherwise capture a new start position after changing tools.
 
