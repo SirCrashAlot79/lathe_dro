@@ -123,6 +123,13 @@ def tool_offset_for(tool_id, positions):
         return None
     return tool_position[0] - reference[0], tool_position[1] - reference[1]
 
+
+def tool_corrected_x_count(x_pulses, tool_id, positions):
+    offset = tool_offset_for(tool_id, positions)
+    if offset is None:
+        return None
+    return x_pulses - offset[0]
+
 if __name__ == "__main__":
     argument_parser = argparse.ArgumentParser(description="Lathe digital readout")
     argument_parser.add_argument("--port", help="Pico USB serial port, for example /dev/ttyACM0")
@@ -181,6 +188,7 @@ STATE_TAPER = 4
 STATE_THREAD = 5
 STATE_SPEED = 6
 STATE_COORD = 7
+STATE_BORING = 8
 BOOT_DURATION_MS = 2500
 current_state = STATE_BOOT
 
@@ -193,6 +201,14 @@ is_diameter_mode = True
 is_metric = False
 is_abs_mode = True
 current_tool_id = 1
+operation_mode = "TURNING"
+boring_initial_diameter = ""
+boring_start_x_counts = None
+boring_start_tool_id = None
+boring_start_tool_offset = None
+boring_direction = 1
+boring_metric = False
+boring_status = ""
 
 # User Adjustable Parameters via Setup Panel
 resolution_tier = 0.0005     # Toggles: 0.0001, 0.0005, 0.0010
@@ -311,6 +327,25 @@ def shoulder_distance(first, second):
     return abs(second - first)
 
 
+def boring_hole_diameter(initial_diameter, initial_x_counts, current_x_counts,
+                         increasing_direction=1, metric=False,
+                         pulses_per_inch=PULSES_PER_INCH, linear_error_comp=1.0):
+    values = (initial_diameter, initial_x_counts, current_x_counts, pulses_per_inch, linear_error_comp)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("boring inputs must be finite numbers")
+    if initial_diameter < 0 or pulses_per_inch <= 0 or linear_error_comp <= 0:
+        raise ValueError("diameter must be non-negative and calibration values positive")
+    if increasing_direction not in (-1, 1):
+        raise ValueError("increasing direction must be 1 or -1")
+
+    radial_travel_inches = (current_x_counts - initial_x_counts) / pulses_per_inch
+    radial_travel_inches *= linear_error_comp * increasing_direction
+    diameter_increase = radial_travel_inches * 2
+    if metric:
+        diameter_increase *= 25.4
+    return initial_diameter + diameter_increase
+
+
 def bolt_circle_coordinates(pitch_circle_diameter, hole_count, start_angle_degrees=0):
     values = (pitch_circle_diameter, start_angle_degrees)
     if not all(math.isfinite(value) for value in values):
@@ -335,6 +370,8 @@ col1_x = panel_x + 10
 col2_x = panel_x + btn_w + 20
 
 main_buttons = {
+    "TURNING": pygame.Rect(40, 20, 230, 54),
+    "BORING": pygame.Rect(282, 20, 230, 54),
     "DIA":     pygame.Rect(col1_x, int(height*0.02), btn_w, btn_h),
     "INCH/MM": pygame.Rect(col2_x, int(height*0.02), btn_w, btn_h),
     "ZERO_X":  pygame.Rect(col1_x, int(height*0.16), btn_w, btn_h),
@@ -348,6 +385,25 @@ main_buttons = {
     "COORD":   pygame.Rect(col1_x, int(height*0.72), btn_w, btn_h),
     "SETUP":   pygame.Rect(col2_x, int(height*0.72), btn_w, btn_h)
 }
+
+boring_input_rect = pygame.Rect(50, 165, 500, 70)
+boring_buttons = {
+    "TURNING": pygame.Rect(40, 20, 230, 54),
+    "CAPTURE": pygame.Rect(50, 275, 500, 75),
+    "DIRECTION": pygame.Rect(50, 370, 500, 60),
+}
+boring_readout_width = int(width * 0.115)
+boring_readout_gap = int(width * 0.008)
+boring_readout_start = width - 20 - 3 * boring_readout_width - 2 * boring_readout_gap
+boring_readout_rects = {
+    name: pygame.Rect(boring_readout_start + index * (boring_readout_width + boring_readout_gap), 20, boring_readout_width, 56)
+    for index, name in enumerate(("X", "Z", "RPM"))
+}
+boring_zero_buttons = {
+    "X": pygame.Rect(boring_readout_rects["X"].x, 84, boring_readout_width, 38),
+    "Z": pygame.Rect(boring_readout_rects["Z"].x, 84, boring_readout_width, 38),
+}
+boring_tool_button = pygame.Rect(boring_readout_rects["RPM"].x, 84, boring_readout_width, 38)
 
 setup_buttons = {
     "RES_TOGGLE": pygame.Rect(50, 150, 300, 60),
@@ -513,6 +569,11 @@ while running:
         if clicked:
             if main_buttons["SETUP"].collidepoint(pos):
                 current_state = STATE_SETUP_MENU  # SWAP THE SCREEN STATE HERE
+            elif main_buttons["TURNING"].collidepoint(pos):
+                operation_mode = "TURNING"
+            elif main_buttons["BORING"].collidepoint(pos):
+                operation_mode = "BORING"
+                current_state = STATE_BORING
             elif main_buttons["TOOL_SETUP"].collidepoint(pos):
                 current_state = STATE_TOOL_SETUP
             elif main_buttons["TAPER"].collidepoint(pos):
@@ -570,8 +631,8 @@ while running:
         pygame.draw.line(screen, GREY, (0, int(height*0.66)), (panel_x, int(height*0.66)), 4)
         pygame.draw.line(screen, GREY, (panel_x, 0), (panel_x, height), 4)
 
-        screen.blit(font_medium.render("X", True, WHITE), (40, int(height * 0.08)))
-        screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, int(height * 0.04)))
+        screen.blit(font_medium.render("X", True, WHITE), (40, int(height * 0.165)))
+        screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, int(height * 0.125)))
         screen.blit(font_medium.render("Z", True, WHITE), (40, int(height * 0.41)))
         screen.blit(font_large.render(format(z_display, fmt), True, WHITE), (150, int(height * 0.37)))
         screen.blit(font_medium.render("SPINDLE", True, WHITE), (40, int(height * 0.74)))
@@ -584,7 +645,9 @@ while running:
         for btn_name, rect in main_buttons.items():
             b_color = GREY
             t_color = WHITE
-            if btn_name == "DIA": b_color, t_color = YELLOW, BLACK
+            if btn_name == "TURNING" and operation_mode == "TURNING": b_color, t_color = YELLOW, BLACK
+            elif btn_name == "BORING" and operation_mode == "BORING": b_color, t_color = YELLOW, BLACK
+            elif btn_name == "DIA": b_color, t_color = YELLOW, BLACK
             elif btn_name == "INCH/MM": b_color, t_color = MAGENTA, BLACK
             elif btn_name == "ABS/INC": b_color, t_color = CYAN, BLACK
             elif btn_name in ("SETUP", "TOOL_SETUP"): b_color, t_color = RED, WHITE
@@ -593,6 +656,8 @@ while running:
             pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
             if btn_name == "DIA":
                 label_text = "DIA" if is_diameter_mode else "RAD"
+            elif btn_name in ("TURNING", "BORING"):
+                label_text = btn_name
             elif btn_name == "INCH/MM":
                 label_text = "MM" if is_metric else "INCH"
             elif btn_name == "ABS/INC":
@@ -603,6 +668,172 @@ while running:
                 label_text = f"T-{current_tool_id}" if btn_name == "TOOL_LIB" else btn_name
             lbl = font_small.render(label_text, True, t_color)
             screen.blit(lbl, lbl.get_rect(center=rect.center))
+
+    elif current_state == STATE_BORING:
+        if clicked:
+            if boring_buttons["TURNING"].collidepoint(pos):
+                operation_mode = "TURNING"
+                current_state = STATE_MAIN_DRO
+            elif boring_buttons["CAPTURE"].collidepoint(pos):
+                if DEMO_MODE:
+                    boring_status = "Live Pico readings required for capture"
+                elif not boring_initial_diameter:
+                    boring_status = "Enter initial drill diameter first"
+                else:
+                    boring_start_tool_offset = tool_offset_for(current_tool_id, tool_touch_positions)
+                    boring_start_x_counts = x_pulses - (boring_start_tool_offset[0] if boring_start_tool_offset else 0)
+                    boring_start_tool_id = current_tool_id
+                    boring_metric = is_metric
+                    boring_status = "Start X captured; bore diameter is live"
+            elif boring_buttons["DIRECTION"].collidepoint(pos):
+                boring_direction *= -1
+                if boring_start_x_counts is not None:
+                    boring_status = "X direction changed; recapture the start position"
+                    boring_start_x_counts = None
+            elif boring_zero_buttons["X"].collidepoint(pos):
+                if is_abs_mode:
+                    offset = tool_offset_for(current_tool_id, tool_touch_positions)
+                    x_abs_zero = x_pulses - (offset[0] if offset is not None else 0)
+                else:
+                    x_inc_zero = x_pulses
+            elif boring_zero_buttons["Z"].collidepoint(pos):
+                if is_abs_mode:
+                    offset = tool_offset_for(current_tool_id, tool_touch_positions)
+                    z_abs_zero = z_pulses - (offset[1] if offset is not None else 0)
+                else:
+                    z_inc_zero = z_pulses
+            elif boring_tool_button.collidepoint(pos):
+                next_tool_id = 1 if current_tool_id >= 9 else current_tool_id + 1
+                next_tool_offset = tool_offset_for(next_tool_id, tool_touch_positions)
+                if boring_start_x_counts is not None and next_tool_id != boring_start_tool_id:
+                    if boring_start_tool_offset is None or next_tool_offset is None:
+                        boring_start_x_counts = None
+                        boring_start_tool_id = None
+                        boring_start_tool_offset = None
+                        boring_status = "Tool X offset missing; capture X start again"
+                    else:
+                        boring_status = f"T-{next_tool_id} selected; saved offset retained bore reference"
+                current_tool_id = next_tool_id
+            elif boring_input_rect.collidepoint(pos):
+                pass
+            elif taper_buttons["CLEAR"].collidepoint(pos):
+                boring_initial_diameter = ""
+                boring_start_x_counts = None
+                boring_status = ""
+            else:
+                for key, rect in keypad_buttons.items():
+                    if rect.collidepoint(pos):
+                        if key == "DEL":
+                            boring_initial_diameter = boring_initial_diameter[:-1]
+                        elif key == ".":
+                            if "." not in boring_initial_diameter:
+                                boring_initial_diameter += "."
+                        elif len(boring_initial_diameter) < 12:
+                            boring_initial_diameter += key
+                        boring_start_x_counts = None
+                        break
+
+        draw_industrial_background(screen, width, height)
+        screen.blit(font_medium.render("CENTER BORING", True, YELLOW), (300, 35))
+        x_origin = x_abs_zero if is_abs_mode else x_inc_zero
+        z_origin = z_abs_zero if is_abs_mode else z_inc_zero
+        tool_offset = tool_offset_for(current_tool_id, tool_touch_positions) if is_abs_mode else None
+        x_tool_offset, z_tool_offset = tool_offset or (0, 0)
+        x_reading = ((x_pulses - x_origin - x_tool_offset) / PULSES_PER_INCH) * x_linear_error_comp
+        z_reading = ((z_pulses - z_origin - z_tool_offset) / PULSES_PER_INCH) * z_linear_error_comp
+        if is_metric:
+            x_reading *= 25.4
+            z_reading *= 25.4
+        if is_diameter_mode:
+            x_reading *= 2.0
+        unit = "mm" if is_metric else "in"
+        readout_values = {"X": f"{x_reading:.4f} {unit}", "Z": f"{z_reading:.4f} {unit}", "RPM": f"{rpm}"}
+        for name, rect in boring_readout_rects.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
+            label = font_small.render(name, True, CYAN if name != "RPM" else GREEN)
+            value = font_small.render(readout_values[name], True, WHITE)
+            screen.blit(label, (rect.x + 8, rect.y + 3))
+            screen.blit(value, (rect.x + 8, rect.y + 29))
+        for axis, rect in boring_zero_buttons.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
+            zero_text = font_small.render(f"ZERO {axis}", True, WHITE)
+            screen.blit(zero_text, zero_text.get_rect(center=rect.center))
+        pygame.draw.rect(screen, YELLOW, boring_tool_button)
+        pygame.draw.rect(screen, LIGHT_GREY, boring_tool_button, 2)
+        tool_text = font_small.render(f"T-{current_tool_id}", True, BLACK)
+        screen.blit(tool_text, tool_text.get_rect(center=boring_tool_button.center))
+
+        screen.blit(font_small.render("INITIAL HOLE DIAMETER (measure actual for best accuracy)", True, CYAN), (50, 125))
+        pygame.draw.rect(screen, MED_GREY, boring_input_rect)
+        pygame.draw.rect(screen, YELLOW, boring_input_rect, 3)
+        input_text = font_medium.render(f"{boring_initial_diameter or 'Enter diameter'} {unit}", True, WHITE)
+        screen.blit(input_text, input_text.get_rect(midleft=(boring_input_rect.x + 20, boring_input_rect.centery)))
+
+        for key, rect in keypad_buttons.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, WHITE, rect, 2)
+            key_text = font_medium.render(key, True, WHITE)
+            screen.blit(key_text, key_text.get_rect(center=rect.center))
+
+        capture_rect = boring_buttons["CAPTURE"]
+        capture_color = MED_GREY if DEMO_MODE else GREEN
+        pygame.draw.rect(screen, capture_color, capture_rect)
+        pygame.draw.rect(screen, WHITE, capture_rect, 2)
+        capture_label = "LIVE PICO REQUIRED" if DEMO_MODE else "SET X START AT INITIAL BORE SIZE"
+        capture_text = font_small.render(capture_label, True, WHITE if DEMO_MODE else BLACK)
+        screen.blit(capture_text, capture_text.get_rect(center=capture_rect.center))
+
+        direction_rect = boring_buttons["DIRECTION"]
+        pygame.draw.rect(screen, MED_GREY, direction_rect)
+        pygame.draw.rect(screen, CYAN, direction_rect, 2)
+        direction_label = "X+ INCREASES DIAMETER" if boring_direction > 0 else "X- INCREASES DIAMETER"
+        direction_text = font_small.render(direction_label, True, WHITE)
+        screen.blit(direction_text, direction_text.get_rect(center=direction_rect.center))
+
+        current_tool_offset = tool_offset_for(current_tool_id, tool_touch_positions)
+        if boring_initial_diameter and boring_start_x_counts is not None:
+            if current_tool_id == boring_start_tool_id:
+                current_boring_x_counts = x_pulses - (current_tool_offset[0] if current_tool_offset else 0)
+            elif boring_start_tool_offset is not None and current_tool_offset is not None:
+                current_boring_x_counts = tool_corrected_x_count(x_pulses, current_tool_id, tool_touch_positions)
+            else:
+                current_boring_x_counts = None
+            if current_boring_x_counts is None:
+                bore_text = "TOOL OFFSET REQUIRED; recapture X start"
+                bore_color = RED
+            else:
+                try:
+                    current_bore_diameter = boring_hole_diameter(
+                        float(boring_initial_diameter),
+                        boring_start_x_counts,
+                        current_boring_x_counts,
+                        increasing_direction=boring_direction,
+                        metric=boring_metric,
+                        linear_error_comp=x_linear_error_comp,
+                    )
+                    bore_text = f"EST. BORE DIAMETER: {current_bore_diameter:.4f} {'mm' if boring_metric else 'in'}"
+                    bore_color = GREEN
+                except ValueError as error:
+                    bore_text = str(error)
+                    bore_color = RED
+        elif boring_initial_diameter:
+            bore_text = f"READY TO CAPTURE START: {boring_initial_diameter} {unit}"
+            bore_color = WHITE
+        else:
+            bore_text = "Enter the drilled hole size, then set the X start."
+            bore_color = WHITE
+        screen.blit(font_medium.render(bore_text, True, bore_color), (50, 475))
+        screen.blit(font_small.render("Capture X at the start size; bore outward. Verify the estimate with a bore gauge.", True, WHITE), (50, 545))
+        if boring_status:
+            screen.blit(font_small.render(boring_status, True, YELLOW), (50, 580))
+
+        turning_rect = boring_buttons["TURNING"]
+        pygame.draw.rect(screen, YELLOW, turning_rect)
+        pygame.draw.rect(screen, LIGHT_GREY, turning_rect, 2)
+        turning_text = font_small.render("TURNING / BACK", True, BLACK)
+        screen.blit(turning_text, turning_text.get_rect(center=turning_rect.center))
 
     elif current_state == STATE_COORD:
         if clicked:

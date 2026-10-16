@@ -4,6 +4,7 @@ from lathe_dro_pro import (
     load_tool_touch_positions,
     compound_rest_angle,
     bolt_circle_coordinates,
+    boring_hole_diameter,
     coordinate_midpoint,
     feed_rates_for,
     parse_serial_packet,
@@ -15,6 +16,7 @@ from lathe_dro_pro import (
     spindle_rpm_for_surface_speed,
     thread_setting_for,
     tool_offset_for,
+    tool_corrected_x_count,
 )
 
 
@@ -154,6 +156,31 @@ def test_spindle_step_recommendation_rejects_invalid_target():
 def test_coordinate_helpers_compute_midpoint_and_shoulder_distance():
     assert coordinate_midpoint(2.0, 8.0) == 5.0
     assert shoulder_distance(8.0, 2.0) == 6.0
+
+
+def test_boring_diameter_adds_twice_radial_x_travel():
+    assert boring_hole_diameter(0.5, 1000, 1000 + 2540) == pytest.approx(0.7)
+
+
+def test_boring_diameter_can_reverse_x_direction_and_convert_metric():
+    assert boring_hole_diameter(10, 1000, 1000 - 1000, increasing_direction=-1, metric=True) == pytest.approx(10 + 2.0)
+
+
+def test_boring_diameter_rejects_invalid_scale_calibration():
+    with pytest.raises(ValueError):
+        boring_hole_diameter(0.5, 0, 10, pulses_per_inch=0)
+
+
+def test_boring_x_reference_survives_calibrated_tool_change():
+    positions = {1: (1000, 0), 2: (1500, 0)}
+    start = tool_corrected_x_count(2000, 1, positions)
+    current = tool_corrected_x_count(2000 + 500 + 2540, 2, positions)
+    assert current - start == 2540
+    assert boring_hole_diameter(0.5, start, current) == pytest.approx(0.7)
+
+
+def test_tool_corrected_x_requires_tool_offset():
+    assert tool_corrected_x_count(2000, 2, {1: (1000, 0)}) is None
 
 
 def test_bolt_circle_coordinates_evenly_spaces_four_holes():
