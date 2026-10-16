@@ -1,0 +1,10 @@
+.venv/
+.venv*/
+__pycache__/
+.pytest_cache/
+.vscode/
+build/
+build-*/
+pico-sdk/
+tool_offsets.json
+*.py[cod]
