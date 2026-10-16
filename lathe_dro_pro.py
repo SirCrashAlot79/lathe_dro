@@ -1038,10 +1038,10 @@ while running:
                     recommendation_text = f"BELOW RANGE: minimum is Step 1 at {available[0]} RPM"
                     recommendation_color = RED
                 else:
-                    maximum_text = " (MAX AVAILABLE)" if step_recommendation["at_maximum"] else ""
+                    maximum_text = " MAX" if step_recommendation["at_maximum"] else ""
                     recommendation_text = (
-                        f"USE STEP {step_recommendation['step']} "
-                        f"({step_recommendation['spindle']} spindle pulley): "
+                        f"STEP {step_recommendation['step']} / "
+                        f"{step_recommendation['spindle'].upper()} PULLEY: "
                         f"{step_recommendation['rpm']} RPM{maximum_text}"
                     )
                     recommendation_color = CYAN
@@ -1303,7 +1303,7 @@ while running:
 
         draw_industrial_background(screen, width, height)
         screen.blit(font_medium.render("TOOL OFFSET SETUP", True, YELLOW), (50, 40))
-        screen.blit(font_large.render(f"T-{current_tool_id}", True, WHITE), (50, 110))
+        screen.blit(font_large.render(f"T-{current_tool_id}", True, WHITE), (410, 135))
 
         for name, label in (("PREVIOUS", "PREV"), ("NEXT", "NEXT")):
             rect = tool_setup_buttons[name]
