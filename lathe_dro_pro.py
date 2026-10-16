@@ -635,9 +635,8 @@ while running:
         screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, int(height * 0.125)))
         screen.blit(font_medium.render("Z", True, WHITE), (40, int(height * 0.41)))
         screen.blit(font_large.render(format(z_display, fmt), True, WHITE), (150, int(height * 0.37)))
-        screen.blit(font_medium.render("SPINDLE", True, WHITE), (40, int(height * 0.74)))
-        screen.blit(font_large.render(f"{rpm}", True, GREEN), (320, int(height * 0.70)))
-        screen.blit(font_medium.render("RPM", True, GREEN), (width * 0.58, int(height * 0.74)))
+        screen.blit(font_medium.render("SPINDLE SPEED", True, WHITE), (40, int(height * 0.68)))
+        screen.blit(font_large.render(f"{rpm} RPM", True, GREEN), (40, int(height * 0.74)))
         status_color = GREEN if DEMO_MODE or serial_connection is not None else RED
         screen.blit(font_small.render(connection_status, True, status_color), (40, int(height * 0.94)))
 
