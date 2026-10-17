@@ -538,6 +538,7 @@ speed_buttons = {
 }
 coord_mode = "MIDPOINT"
 coord_values = {"first": "", "second": "", "pcd": "", "holes": "", "start": "0"}
+COORD_INPUT_MAX_LENGTH = {"first": 12, "second": 12, "pcd": 8, "holes": 2, "start": 8}
 active_coord_field = "first"
 coord_mode_buttons = {
     "MIDPOINT": pygame.Rect(50, 95, 180, 55),
@@ -855,7 +856,7 @@ while running:
         tool_text = font_small.render(f"T-{current_tool_id}", True, BLACK)
         screen.blit(tool_text, tool_text.get_rect(center=boring_tool_button.center))
 
-        draw_wrapped_text(screen, "INITIAL HOLE DIAMETER (measure actual for best accuracy)", font_small, CYAN, (50, 125), keypad_x - 70)
+        draw_wrapped_text(screen, "INITIAL HOLE DIAMETER", font_small, CYAN, (50, 125), boring_input_rect.width)
         pygame.draw.rect(screen, MED_GREY, boring_input_rect)
         pygame.draw.rect(screen, YELLOW, boring_input_rect, 3)
         input_text = font_medium.render(f"{boring_initial_diameter or 'Enter diameter'} {unit}", True, WHITE)
@@ -953,7 +954,7 @@ while running:
                                     elif key == ".":
                                         if active_coord_field != "holes" and "." not in value:
                                             coord_values[active_coord_field] = value + "."
-                                    elif len(value) < 12:
+                                    elif len(value) < COORD_INPUT_MAX_LENGTH[active_coord_field]:
                                         coord_values[active_coord_field] = value + key
                                     break
 
@@ -970,7 +971,7 @@ while running:
         result_lines = []
         bolt_points = []
         if coord_mode == "BOLT CIRCLE":
-            labels = {"pcd": f"PCD ({unit})", "holes": "HOLE COUNT", "start": "START ANGLE (DEG)"}
+            labels = {"pcd": f"PCD ({unit})", "holes": "HOLE COUNT", "start": "START ANGLE"}
             for field_name in ("pcd", "holes", "start"):
                 rect = coord_fields[field_name]
                 label = font_small.render(labels[field_name], True, CYAN)
@@ -1032,7 +1033,7 @@ while running:
                     screen.blit(point_text, (50 + column * 330, 300 + row * 29))
             elif not result_lines:
                 result_lines = [("Enter PCD, hole count, and start angle.", WHITE)]
-            draw_wrapped_text(screen, "Coordinates are relative to center; angle advances counterclockwise from +X.", font_small, WHITE, (50, 665), width - 500)
+            draw_wrapped_text(screen, "Start angle is in degrees. Coordinates are relative to center; holes advance counterclockwise from +X.", font_small, WHITE, (50, 665), width - 500)
         elif not result_lines:
             result_lines = [("Enter both values to calculate.", WHITE)]
         for line_index, (line, color) in enumerate(result_lines):
