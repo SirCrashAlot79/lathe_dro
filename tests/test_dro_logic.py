@@ -18,6 +18,7 @@ from lathe_dro_pro import (
     thread_setting_for,
     tool_offset_for,
     tool_corrected_x_count,
+    wrap_text,
 )
 
 
@@ -170,6 +171,15 @@ def test_boring_diameter_can_reverse_x_direction_and_convert_metric():
 def test_boring_diameter_rejects_invalid_scale_calibration():
     with pytest.raises(ValueError):
         boring_hole_diameter(0.5, 0, 10, pulses_per_inch=0)
+
+
+def test_wrap_text_keeps_lines_inside_available_width():
+    import pygame
+    pygame.font.init()
+    font = pygame.font.SysFont("sans", 24)
+    lines = wrap_text("A long setup message must stay clear of the keypad buttons.", font, 180)
+    assert len(lines) > 1
+    assert all(font.size(line)[0] <= 180 for line in lines)
 
 
 def test_boring_x_reference_survives_calibrated_tool_change():

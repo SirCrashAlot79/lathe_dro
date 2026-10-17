@@ -180,6 +180,42 @@ def draw_industrial_background(target, target_width, target_height):
     pygame.draw.rect(target, (7, 10, 12), (0, target_height - 8, target_width, 8))
     pygame.draw.line(target, (48, 60, 62), (14, 20), (14, target_height - 20), 2)
 
+
+def wrap_text(text, font, max_width):
+    lines = []
+    for paragraph in text.splitlines() or [""]:
+        current_line = ""
+        for word in paragraph.split():
+            candidate = word if not current_line else f"{current_line} {word}"
+            if font.size(candidate)[0] <= max_width:
+                current_line = candidate
+                continue
+            if current_line:
+                lines.append(current_line)
+                current_line = ""
+            if font.size(word)[0] <= max_width:
+                current_line = word
+                continue
+            fragment = ""
+            for character in word:
+                if fragment and font.size(fragment + character)[0] > max_width:
+                    lines.append(fragment)
+                    fragment = character
+                else:
+                    fragment += character
+            current_line = fragment
+        lines.append(current_line)
+    return lines
+
+
+def draw_wrapped_text(target, text, font, color, position, max_width, line_gap=3):
+    x_position, y_position = position
+    for line in wrap_text(text, font, max_width):
+        surface = font.render(line, True, color)
+        target.blit(surface, (x_position, y_position))
+        y_position += surface.get_height() + line_gap
+    return y_position
+
 # --- APP STATES ---
 STATE_MAIN_DRO = 0
 STATE_SETUP_MENU = 1
@@ -439,8 +475,8 @@ setup_buttons = {
 }
 
 power_confirm_buttons = {
-    "CANCEL": pygame.Rect(width // 2 - 260, int(height * 0.62), 220, 80),
-    "CONFIRM": pygame.Rect(width // 2 + 40, int(height * 0.62), 260, 80)
+    "CANCEL": pygame.Rect(width // 2 - 260, int(height * 0.70), 220, 80),
+    "CONFIRM": pygame.Rect(width // 2 + 40, int(height * 0.70), 260, 80)
 }
 
 tool_setup_buttons = {
@@ -609,8 +645,7 @@ while running:
         detail = font_small.render("The DRO will close and Ubuntu will power off.", True, WHITE)
         screen.blit(detail, detail.get_rect(center=(width // 2, int(height * 0.49))))
         if poweroff_status:
-            error_text = font_small.render(poweroff_status, True, RED)
-            screen.blit(error_text, error_text.get_rect(center=(width // 2, int(height * 0.56))))
+            draw_wrapped_text(screen, poweroff_status, font_small, RED, (70, int(height * 0.55)), width - 140)
         for key, label, color in (("CANCEL", "CANCEL", MED_GREY), ("CONFIRM", "SHUT DOWN", RED)):
             rect = power_confirm_buttons[key]
             pygame.draw.rect(screen, color, rect)
@@ -820,7 +855,7 @@ while running:
         tool_text = font_small.render(f"T-{current_tool_id}", True, BLACK)
         screen.blit(tool_text, tool_text.get_rect(center=boring_tool_button.center))
 
-        screen.blit(font_small.render("INITIAL HOLE DIAMETER (measure actual for best accuracy)", True, CYAN), (50, 125))
+        draw_wrapped_text(screen, "INITIAL HOLE DIAMETER (measure actual for best accuracy)", font_small, CYAN, (50, 125), keypad_x - 70)
         pygame.draw.rect(screen, MED_GREY, boring_input_rect)
         pygame.draw.rect(screen, YELLOW, boring_input_rect, 3)
         input_text = font_medium.render(f"{boring_initial_diameter or 'Enter diameter'} {unit}", True, WHITE)
@@ -879,10 +914,10 @@ while running:
         else:
             bore_text = "Enter the drilled hole size, then set the X start."
             bore_color = WHITE
-        screen.blit(font_medium.render(bore_text, True, bore_color), (50, 475))
-        screen.blit(font_small.render("Capture X at the start size; bore outward. Verify the estimate with a bore gauge.", True, WHITE), (50, 545))
+        draw_wrapped_text(screen, bore_text, font_medium, bore_color, (50, 475), keypad_x - 70)
+        draw_wrapped_text(screen, "Capture X at the start size; bore outward. Verify the estimate with a bore gauge.", font_small, WHITE, (50, 545), keypad_x - 70)
         if boring_status:
-            screen.blit(font_small.render(boring_status, True, YELLOW), (50, 580))
+            draw_wrapped_text(screen, boring_status, font_small, YELLOW, (50, 580), keypad_x - 70)
 
         turning_rect = boring_buttons["TURNING"]
         pygame.draw.rect(screen, YELLOW, turning_rect)
@@ -997,12 +1032,11 @@ while running:
                     screen.blit(point_text, (50 + column * 330, 300 + row * 29))
             elif not result_lines:
                 result_lines = [("Enter PCD, hole count, and start angle.", WHITE)]
-            screen.blit(font_small.render("Coordinates are relative to center; angle advances counterclockwise from +X.", True, WHITE), (50, 665))
+            draw_wrapped_text(screen, "Coordinates are relative to center; angle advances counterclockwise from +X.", font_small, WHITE, (50, 665), width - 500)
         elif not result_lines:
             result_lines = [("Enter both values to calculate.", WHITE)]
         for line_index, (line, color) in enumerate(result_lines):
-            result_text = font_medium.render(line, True, color)
-            screen.blit(result_text, (50, 440 + line_index * 48))
+            draw_wrapped_text(screen, line, font_small, color, (50, 440 + line_index * 48), keypad_x - 70)
 
         back_rect = coord_buttons["BACK"]
         pygame.draw.rect(screen, RED, back_rect)
@@ -1111,16 +1145,13 @@ while running:
             speed_result_color = WHITE
             recommendation_text = ""
             recommendation_color = WHITE
-        result_text = font_small.render(speed_result, True, speed_result_color)
-        screen.blit(result_text, (50, 585))
-        recommendation_surface = font_small.render(recommendation_text, True, recommendation_color)
-        screen.blit(recommendation_surface, (50, 615))
+        draw_wrapped_text(screen, speed_result, font_small, speed_result_color, (50, 585), keypad_x - 70)
+        draw_wrapped_text(screen, recommendation_text, font_small, recommendation_color, (50, 615), keypad_x - 70)
         if speed_drive_mode == "BACK GEAR" and speed_range_mode == "HIGH RANGE":
             note_text = "HIGH-RANGE BACK-GEAR values are starred on the supplied chart; verify its footnote."
         else:
             note_text = "Change belt or engage back gear only with the spindle stopped."
-        speed_note = font_small.render(note_text, True, WHITE)
-        screen.blit(speed_note, (50, 650))
+        draw_wrapped_text(screen, note_text, font_small, WHITE, (50, 650), width - 500)
         back_rect = speed_buttons["BACK"]
         pygame.draw.rect(screen, RED, back_rect)
         pygame.draw.rect(screen, WHITE, back_rect, 2)
@@ -1189,11 +1220,10 @@ while running:
                         (f"LONG FEED: {feed_rates['longitudinal_per_rev']:.4f} {feed_unit}/rev  |  {feed_rates['longitudinal_per_min']:.1f} {feed_unit}/min", CYAN),
                         (f"CROSS FEED (1/3): {feed_rates['cross_per_rev']:.4f} {feed_unit}/rev  |  {feed_rates['cross_per_min']:.1f} {feed_unit}/min", CYAN),
                     ]
-        for line_index, (line, color) in enumerate(result_lines):
-            result_text = font_small.render(line, True, color)
-            screen.blit(result_text, (50, 295 + line_index * 38))
-        note = font_small.render("Stop spindle before changing gears. Verify the first thread with a pitch gauge.", True, WHITE)
-        screen.blit(note, (50, 535))
+        result_y = 295
+        for line, color in result_lines:
+            result_y = draw_wrapped_text(screen, line, font_small, color, (50, result_y), keypad_x - 70, line_gap=2) + 5
+        draw_wrapped_text(screen, "Stop spindle before changing gears. Verify the first thread with a pitch gauge.", font_small, WHITE, (50, 535), keypad_x - 70)
 
         back_rect = thread_buttons["BACK"]
         pygame.draw.rect(screen, RED, back_rect)
@@ -1227,7 +1257,7 @@ while running:
                             taper_values[active_taper_field] = ""
 
         draw_industrial_background(screen, width, height)
-        screen.blit(font_medium.render("COMPOUND REST TAPER CALCULATOR", True, YELLOW), (50, 35))
+        draw_wrapped_text(screen, "COMPOUND REST TAPER CALCULATOR", font_medium, YELLOW, (50, 35), keypad_x - 70)
         unit = "mm" if is_metric else "in"
         field_labels = {
             "large": f"LARGE DIAMETER ({unit})",
@@ -1269,10 +1299,8 @@ while running:
         else:
             angle_text = "Enter all three dimensions"
             angle_color = WHITE
-        angle_surface = font_medium.render(angle_text, True, angle_color)
-        screen.blit(angle_surface, (50, 500))
-        formula = font_small.render("Angle from spindle axis = atan(|D1 - D2| / (2 x L))", True, WHITE)
-        screen.blit(formula, (50, 555))
+        draw_wrapped_text(screen, angle_text, font_small, angle_color, (50, 500), keypad_x - 70)
+        draw_wrapped_text(screen, "Angle from spindle axis = atan(|D1 - D2| / (2 x L))", font_small, WHITE, (50, 555), keypad_x - 70)
 
         back_rect = taper_buttons["BACK"]
         pygame.draw.rect(screen, RED, back_rect)
@@ -1311,7 +1339,7 @@ while running:
         screen.blit(font_small.render(f"SET STEP RES: {resolution_tier: .4f} in", True, WHITE), (70, 165))
         
         # 2. X Axis Scale Calibration Tuning blocks
-        screen.blit(font_small.render(f"X-Scale Compensation Matrix Factor: {x_linear_error_comp: .4f}", True, WHITE), (50, 260))
+        draw_wrapped_text(screen, f"X-Scale Compensation Matrix Factor: {x_linear_error_comp: .4f}", font_small, WHITE, (50, 260), width - 400)
         pygame.draw.rect(screen, MED_GREY, setup_buttons["COMP_X_UP"])
         pygame.draw.rect(screen, WHITE, setup_buttons["COMP_X_UP"], 2)
         screen.blit(font_small.render("+ 0.0001", True, GREEN), (75, 315))
@@ -1321,7 +1349,7 @@ while running:
         screen.blit(font_small.render("- 0.0001", True, RED), (235, 315))
 
         # 3. Z Axis Scale Calibration Tuning blocks
-        screen.blit(font_small.render(f"Z-Scale Compensation Matrix Factor: {z_linear_error_comp: .4f}", True, WHITE), (50, 410))
+        draw_wrapped_text(screen, f"Z-Scale Compensation Matrix Factor: {z_linear_error_comp: .4f}", font_small, WHITE, (50, 410), width - 400)
         pygame.draw.rect(screen, MED_GREY, setup_buttons["COMP_Z_UP"])
         pygame.draw.rect(screen, WHITE, setup_buttons["COMP_Z_UP"], 2)
         screen.blit(font_small.render("+ 0.0001", True, GREEN), (75, 465))
@@ -1368,8 +1396,8 @@ while running:
             text = font_small.render(label, True, WHITE)
             screen.blit(text, text.get_rect(center=rect.center))
 
-        screen.blit(font_small.render("Touch T-1 to the datum and capture it as master.", True, WHITE), (50, 245))
-        screen.blit(font_small.render("Touch each other tool to the same datum, then capture.", True, WHITE), (50, 285))
+        draw_wrapped_text(screen, "Touch T-1 to the datum and capture it as master.", font_small, WHITE, (50, 245), width - 400)
+        draw_wrapped_text(screen, "Touch each other tool to the same datum, then capture.", font_small, WHITE, (50, 285), width - 400)
         tool_offset = tool_offset_for(current_tool_id, tool_touch_positions)
         if current_tool_id == 1 and 1 in tool_touch_positions:
             offset_text = "MASTER REFERENCE SET"
@@ -1385,7 +1413,7 @@ while running:
                 x_offset *= 2
             unit = "mm" if is_metric else "in"
             offset_text = f"X OFFSET {x_offset:.4f} {unit}    Z OFFSET {z_offset:.4f} {unit}"
-        screen.blit(font_small.render(offset_text, True, CYAN), (50, 335))
+        draw_wrapped_text(screen, offset_text, font_small, CYAN, (50, 335), width - 400)
 
         capture_rect = tool_setup_buttons["CAPTURE"]
         capture_color = MED_GREY if DEMO_MODE else GREEN
