@@ -947,9 +947,9 @@ while running:
             bore_text = "Enter the drilled hole size, then set the X start."
             bore_color = WHITE
         draw_wrapped_text(screen, bore_text, font_medium, bore_color, (50, 475), keypad_x - 70)
-        draw_wrapped_text(screen, "Capture X at the start size; bore outward. Verify the estimate with a bore gauge.", font_small, WHITE, (50, 545), keypad_x - 70)
+        draw_wrapped_text(screen, "Capture X at the start size; bore outward. Verify the estimate with a bore gauge.", font_small, WHITE, (50, 555), keypad_x - 70)
         if boring_status:
-            draw_wrapped_text(screen, boring_status, font_small, YELLOW, (50, 580), keypad_x - 70)
+            draw_wrapped_text(screen, boring_status, font_small, YELLOW, (50, 620), keypad_x - 70)
 
         turning_rect = boring_buttons["TURNING"]
         pygame.draw.rect(screen, YELLOW, turning_rect)
