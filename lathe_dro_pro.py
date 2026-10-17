@@ -144,18 +144,29 @@ if __name__ == "__main__":
 
     pygame.init()
     if arguments.fullscreen:
-        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        display_screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     else:
-        screen = pygame.display.set_mode((1280, 720))
+        display_screen = pygame.display.set_mode((1280, 720))
     pygame.display.set_caption("South Bend 10k Pro Toolroom DRO")
-    width, height = screen.get_size()
+    width, height = 1280, 720
+    screen = pygame.Surface((width, height))
+    display_width, display_height = display_screen.get_size()
+    ui_scale = min(display_width / width, display_height / height)
+    viewport_width = int(width * ui_scale)
+    viewport_height = int(height * ui_scale)
+    viewport_left = (display_width - viewport_width) // 2
+    viewport_top = (display_height - viewport_height) // 2
     font_large = pygame.font.SysFont("courier", int(height * 0.13), bold=True)
     font_medium = pygame.font.SysFont("sans", int(height * 0.05), bold=True)
     font_small = pygame.font.SysFont("sans", int(height * 0.032))
     font_logo = pygame.font.SysFont("serif", int(height * 0.13), bold=True)
 else:
+    display_screen = None
     screen = None
     width, height = 1280, 720
+    ui_scale = 1.0
+    viewport_left = 0
+    viewport_top = 0
 
 # --- THEME STYLING ---
 BLACK = (11, 15, 17)
@@ -600,8 +611,14 @@ while running:
         if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
             running = False
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            pos = event.pos
-            clicked = True
+            display_x, display_y = event.pos
+            if (viewport_left <= display_x < viewport_left + viewport_width and
+                    viewport_top <= display_y < viewport_top + viewport_height):
+                pos = (
+                    int((display_x - viewport_left) / ui_scale),
+                    int((display_y - viewport_top) / ui_scale),
+                )
+                clicked = True
 
     # 2. RUN SIMULATED HARDWARE FEEDBACK ENGINE
     if DEMO_MODE:
@@ -1485,6 +1502,9 @@ while running:
         back_text = font_medium.render("BACK", True, WHITE)
         screen.blit(back_text, back_text.get_rect(center=back_rect.center))
 
+    display_screen.fill(BLACK)
+    scaled_screen = pygame.transform.smoothscale(screen, (viewport_width, viewport_height))
+    display_screen.blit(scaled_screen, (viewport_left, viewport_top))
     pygame.display.flip()
     clock.tick(60)
 
