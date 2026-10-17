@@ -426,11 +426,13 @@ header_button_gap = 8
 header_button_width = max(70, int((width - panel_x - 30 - 2 * header_button_gap) / 3))
 header_button_start = panel_x + 10
 header_button_y = 20
-header_button_height = 72
+header_button_height = max(72, int(height * 0.085))
+operation_button_gap = 12
+operation_button_width = max(240, min(360, int(width * 0.20)))
 
 main_buttons = {
-    "TURNING": pygame.Rect(40, 20, 230, header_button_height),
-    "BORING": pygame.Rect(282, 20, 230, header_button_height),
+    "TURNING": pygame.Rect(40, 20, operation_button_width, header_button_height),
+    "BORING": pygame.Rect(40 + operation_button_width + operation_button_gap, 20, operation_button_width, header_button_height),
     "DIA": pygame.Rect(header_button_start, header_button_y, header_button_width, header_button_height),
     "INCH/MM": pygame.Rect(header_button_start + header_button_width + header_button_gap, header_button_y, header_button_width, header_button_height),
     "POWER": pygame.Rect(header_button_start + 2 * (header_button_width + header_button_gap), header_button_y, header_button_width, header_button_height),
@@ -734,8 +736,9 @@ while running:
         pygame.draw.line(screen, GREY, (0, int(height*0.66)), (panel_x, int(height*0.66)), 4)
         pygame.draw.line(screen, GREY, (panel_x, 0), (panel_x, height), 4)
 
-        screen.blit(font_medium.render("X", True, WHITE), (40, int(height * 0.185)))
-        screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, int(height * 0.145)))
+        x_value_y = max(int(height * 0.145), header_button_y + header_button_height + 8)
+        screen.blit(font_medium.render("X", True, WHITE), (40, int(x_value_y + height * 0.04)))
+        screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, x_value_y))
         screen.blit(font_medium.render("Z", True, WHITE), (40, int(height * 0.41)))
         screen.blit(font_large.render(format(z_display, fmt), True, WHITE), (150, int(height * 0.37)))
         screen.blit(font_medium.render("SPINDLE SPEED", True, WHITE), (40, int(height * 0.68)))
