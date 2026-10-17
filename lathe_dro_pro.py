@@ -426,11 +426,11 @@ header_button_gap = 8
 header_button_width = max(70, int((width - panel_x - 30 - 2 * header_button_gap) / 3))
 header_button_start = panel_x + 10
 header_button_y = 20
-header_button_height = 54
+header_button_height = 72
 
 main_buttons = {
-    "TURNING": pygame.Rect(40, 20, 230, 54),
-    "BORING": pygame.Rect(282, 20, 230, 54),
+    "TURNING": pygame.Rect(40, 20, 230, header_button_height),
+    "BORING": pygame.Rect(282, 20, 230, header_button_height),
     "DIA": pygame.Rect(header_button_start, header_button_y, header_button_width, header_button_height),
     "INCH/MM": pygame.Rect(header_button_start + header_button_width + header_button_gap, header_button_y, header_button_width, header_button_height),
     "POWER": pygame.Rect(header_button_start + 2 * (header_button_width + header_button_gap), header_button_y, header_button_width, header_button_height),
@@ -480,10 +480,21 @@ power_confirm_buttons = {
 }
 
 tool_setup_buttons = {
-    "PREVIOUS": pygame.Rect(60, 150, 140, 70),
-    "NEXT": pygame.Rect(220, 150, 140, 70),
-    "CAPTURE": pygame.Rect(60, 390, 300, 80),
+    "PREVIOUS": pygame.Rect(60, 215, 140, 70),
+    "NEXT": pygame.Rect(220, 215, 140, 70),
+    "CAPTURE": pygame.Rect(60, 325, 300, 80),
     "BACK": pygame.Rect(width - 350, height - 120, 300, 80)
+}
+tool_readout_width = int(width * 0.18)
+tool_readout_gap = int(width * 0.02)
+tool_readout_start = width - 2 * tool_readout_width - tool_readout_gap - 24
+tool_readout_rects = {
+    "X": pygame.Rect(tool_readout_start, 30, tool_readout_width, 82),
+    "Z": pygame.Rect(tool_readout_start + tool_readout_width + tool_readout_gap, 30, tool_readout_width, 82)
+}
+tool_zero_buttons = {
+    "X": pygame.Rect(tool_readout_rects["X"].x, 130, tool_readout_width, 52),
+    "Z": pygame.Rect(tool_readout_rects["Z"].x, 130, tool_readout_width, 52)
 }
 
 taper_values = {"large": "", "small": "", "length": ""}
@@ -723,8 +734,8 @@ while running:
         pygame.draw.line(screen, GREY, (0, int(height*0.66)), (panel_x, int(height*0.66)), 4)
         pygame.draw.line(screen, GREY, (panel_x, 0), (panel_x, height), 4)
 
-        screen.blit(font_medium.render("X", True, WHITE), (40, int(height * 0.165)))
-        screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, int(height * 0.125)))
+        screen.blit(font_medium.render("X", True, WHITE), (40, int(height * 0.185)))
+        screen.blit(font_large.render(format(x_display, fmt), True, CYAN), (150, int(height * 0.145)))
         screen.blit(font_medium.render("Z", True, WHITE), (40, int(height * 0.41)))
         screen.blit(font_large.render(format(z_display, fmt), True, WHITE), (150, int(height * 0.37)))
         screen.blit(font_medium.render("SPINDLE SPEED", True, WHITE), (40, int(height * 0.68)))
@@ -1373,6 +1384,18 @@ while running:
                 current_tool_id = 9 if current_tool_id == 1 else current_tool_id - 1
             elif tool_setup_buttons["NEXT"].collidepoint(pos):
                 current_tool_id = 1 if current_tool_id >= 9 else current_tool_id + 1
+            elif tool_zero_buttons["X"].collidepoint(pos):
+                if is_abs_mode:
+                    offset = tool_offset_for(current_tool_id, tool_touch_positions)
+                    x_abs_zero = x_pulses - (offset[0] if offset is not None else 0)
+                else:
+                    x_inc_zero = x_pulses
+            elif tool_zero_buttons["Z"].collidepoint(pos):
+                if is_abs_mode:
+                    offset = tool_offset_for(current_tool_id, tool_touch_positions)
+                    z_abs_zero = z_pulses - (offset[1] if offset is not None else 0)
+                else:
+                    z_inc_zero = z_pulses
             elif tool_setup_buttons["CAPTURE"].collidepoint(pos):
                 if DEMO_MODE:
                     connection_status = "Live Pico required for tool capture"
@@ -1388,7 +1411,32 @@ while running:
 
         draw_industrial_background(screen, width, height)
         screen.blit(font_medium.render("TOOL OFFSET SETUP", True, YELLOW), (50, 40))
-        screen.blit(font_large.render(f"T-{current_tool_id}", True, WHITE), (410, 135))
+        screen.blit(font_large.render(f"T-{current_tool_id}", True, WHITE), (50, 105))
+
+        x_origin = x_abs_zero if is_abs_mode else x_inc_zero
+        z_origin = z_abs_zero if is_abs_mode else z_inc_zero
+        tool_offset = tool_offset_for(current_tool_id, tool_touch_positions) if is_abs_mode else None
+        x_tool_offset, z_tool_offset = tool_offset or (0, 0)
+        x_reading = ((x_pulses - x_origin - x_tool_offset) / PULSES_PER_INCH) * x_linear_error_comp
+        z_reading = ((z_pulses - z_origin - z_tool_offset) / PULSES_PER_INCH) * z_linear_error_comp
+        if is_metric:
+            x_reading *= 25.4
+            z_reading *= 25.4
+        if is_diameter_mode:
+            x_reading *= 2.0
+        unit = "mm" if is_metric else "in"
+        tool_readout_values = {"X": f"{x_reading:.4f} {unit}", "Z": f"{z_reading:.4f} {unit}"}
+        for axis, rect in tool_readout_rects.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
+            screen.blit(font_small.render(axis, True, CYAN), (rect.x + 10, rect.y + 5))
+            value = font_small.render(tool_readout_values[axis], True, WHITE)
+            screen.blit(value, (rect.x + 10, rect.y + 42))
+            zero_rect = tool_zero_buttons[axis]
+            pygame.draw.rect(screen, MED_GREY, zero_rect)
+            pygame.draw.rect(screen, CYAN, zero_rect, 2)
+            zero_label = font_small.render(f"ZERO {axis}", True, WHITE)
+            screen.blit(zero_label, zero_label.get_rect(center=zero_rect.center))
 
         for name, label in (("PREVIOUS", "PREV"), ("NEXT", "NEXT")):
             rect = tool_setup_buttons[name]
@@ -1397,8 +1445,8 @@ while running:
             text = font_small.render(label, True, WHITE)
             screen.blit(text, text.get_rect(center=rect.center))
 
-        draw_wrapped_text(screen, "Touch T-1 to the datum and capture it as master.", font_small, WHITE, (50, 245), width - 400)
-        draw_wrapped_text(screen, "Touch each other tool to the same datum, then capture.", font_small, WHITE, (50, 285), width - 400)
+        draw_wrapped_text(screen, "Touch T-1 to the datum and capture it as master.", font_small, WHITE, (50, 430), width - 400)
+        draw_wrapped_text(screen, "Touch each other tool to the same datum, then capture.", font_small, WHITE, (50, 465), width - 400)
         tool_offset = tool_offset_for(current_tool_id, tool_touch_positions)
         if current_tool_id == 1 and 1 in tool_touch_positions:
             offset_text = "MASTER REFERENCE SET"
@@ -1414,7 +1462,8 @@ while running:
                 x_offset *= 2
             unit = "mm" if is_metric else "in"
             offset_text = f"X OFFSET {x_offset:.4f} {unit}    Z OFFSET {z_offset:.4f} {unit}"
-        draw_wrapped_text(screen, offset_text, font_small, CYAN, (50, 335), width - 400)
+        draw_wrapped_text(screen, offset_text, font_small, CYAN, (50, 500), width - 400)
+        draw_wrapped_text(screen, connection_status, font_small, YELLOW, (50, 540), width - 400)
 
         capture_rect = tool_setup_buttons["CAPTURE"]
         capture_color = MED_GREY if DEMO_MODE else GREEN
