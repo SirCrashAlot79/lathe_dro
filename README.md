@@ -1,5 +1,11 @@
 # Lathe DRO: Dell Latitude 7275 and Raspberry Pi Pico 2
 
+> **Machine compatibility:** The main configuration is tailored to a South Bend
+> 10K lathe with a Model A quick-change gearbox. The Raspberry Pi version is a
+> general-purpose DRO host for any lathe once its scales, spindle sensor, and
+> calibration are configured. Verify machine-specific FEED and SPEED reference
+> values before relying on them.
+
 The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial.
 
 ## Screenshots
