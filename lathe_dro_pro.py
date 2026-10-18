@@ -12,6 +12,7 @@ from serial.tools import list_ports
 PULSES_PER_INCH = 25400.0
 DEMO_MODE = False
 TOOL_OFFSETS_FILE = Path(__file__).with_name("tool_offsets.json")
+SCALE_CALIBRATION_FILE = Path(__file__).with_name("scale_calibration.json")
 THREADING_CHART = (
     (40, "A", (4, 4.5, 5, 5.5, 5.75, 6, 6.5, 7), (0.0853, 0.0758, 0.0683, 0.0621, 0.0594, 0.0569, 0.0525, 0.0488)),
     (20, "A", (8, 9, 10, 11, 11.5, 12, 13, 14), (0.0427, 0.0379, 0.0341, 0.0310, 0.0297, 0.0284, 0.0263, 0.0244)),
@@ -115,6 +116,60 @@ def save_tool_touch_positions(path, positions):
         for tool_id, (x_position, z_position) in positions.items()
     }
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def scale_compensation_for_travel(known_distance, count_delta,
+                                  metric=False, pulses_per_inch=PULSES_PER_INCH):
+    """Return the correction factor from a measured linear-axis move."""
+    values = (known_distance, count_delta, pulses_per_inch)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("calibration values must be finite numbers")
+    if known_distance <= 0 or count_delta == 0 or pulses_per_inch <= 0:
+        raise ValueError("distance, count change, and counts per inch must be positive")
+
+    distance_inches = known_distance / 25.4 if metric else known_distance
+    return distance_inches * pulses_per_inch / abs(count_delta)
+
+
+def load_scale_calibration(path=SCALE_CALIBRATION_FILE):
+    factors = {"x": 1.0, "z": 1.0}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return factors
+    if not isinstance(data, dict):
+        return factors
+
+    for axis in factors:
+        try:
+            factor = float(data.get(axis, factors[axis]))
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(factor) and factor > 0:
+            factors[axis] = factor
+    return factors
+
+
+def save_scale_calibration(path, factors):
+    data = {axis: float(factors[axis]) for axis in ("x", "z")}
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def set_scale_compensation(axis, factor, path=SCALE_CALIBRATION_FILE):
+    """Persist a valid per-axis correction and update the live display factor."""
+    global x_linear_error_comp, z_linear_error_comp, scale_calibration_factors
+
+    axis = axis.upper()
+    if axis not in ("X", "Z") or not math.isfinite(factor) or factor <= 0:
+        raise ValueError("axis must be X or Z and compensation must be positive")
+    updated_factors = dict(scale_calibration_factors)
+    updated_factors[axis.lower()] = float(factor)
+    save_scale_calibration(path, updated_factors)
+    scale_calibration_factors = updated_factors
+    if axis == "X":
+        x_linear_error_comp = updated_factors["x"]
+    else:
+        z_linear_error_comp = updated_factors["z"]
 
 
 def tool_offset_for(tool_id, positions):
@@ -261,8 +316,13 @@ boring_status = ""
 
 # User Adjustable Parameters via Setup Panel
 resolution_tier = 0.0005     # Toggles: 0.0001, 0.0005, 0.0010
-x_linear_error_comp = 1.0000 # Scaling factor to calibrate physical deviations
-z_linear_error_comp = 1.0000
+scale_calibration_factors = load_scale_calibration()
+x_linear_error_comp = scale_calibration_factors["x"]
+z_linear_error_comp = scale_calibration_factors["z"]
+scale_calibration_distances = {"X": "", "Z": ""}
+active_scale_calibration_axis = "X"
+scale_calibration_start_counts = {"X": None, "Z": None}
+scale_calibration_status = ""
 backlash_x = 0.0000          # For mechanical backlash storage
 
 def round_to_precision(value, metric_mode, resolution=0.0005):
@@ -479,11 +539,17 @@ boring_zero_buttons = {
 boring_tool_button = pygame.Rect(boring_readout_rects["RPM"].x, 84, boring_readout_width, 38)
 
 setup_buttons = {
-    "RES_TOGGLE": pygame.Rect(50, 150, 300, 60),
-    "COMP_X_UP":  pygame.Rect(50, 300, 140, 60),
-    "COMP_X_DN":  pygame.Rect(210, 300, 140, 60),
-    "COMP_Z_UP":  pygame.Rect(50, 450, 140, 60),
-    "COMP_Z_DN":  pygame.Rect(210, 450, 140, 60),
+    "RES_TOGGLE": pygame.Rect(50, 90, 300, 60),
+    "CAL_X_DISTANCE": pygame.Rect(50, 190, 190, 60),
+    "CAL_X_START": pygame.Rect(255, 190, 180, 60),
+    "CAL_X_APPLY": pygame.Rect(450, 190, 200, 60),
+    "COMP_X_UP":  pygame.Rect(50, 300, 140, 50),
+    "COMP_X_DN":  pygame.Rect(210, 300, 140, 50),
+    "CAL_Z_DISTANCE": pygame.Rect(50, 410, 190, 60),
+    "CAL_Z_START": pygame.Rect(255, 410, 180, 60),
+    "CAL_Z_APPLY": pygame.Rect(450, 410, 200, 60),
+    "COMP_Z_UP":  pygame.Rect(50, 520, 140, 50),
+    "COMP_Z_DN":  pygame.Rect(210, 520, 140, 50),
     "BACK_MAIN":  pygame.Rect(width - 350, height - 120, 300, 80)
 }
 
@@ -1341,56 +1407,181 @@ while running:
         screen.blit(back_label, back_label.get_rect(center=back_rect.center))
 
     elif current_state == STATE_SETUP_MENU:
-        # --- PARAMETER CONFIGURATION SCREEN LOGIC ---
+        # --- PARAMETER CONFIGURATION AND SCALE CALIBRATION ---
         if clicked:
             if setup_buttons["BACK_MAIN"].collidepoint(pos):
-                current_state = STATE_MAIN_DRO # SAVE AND RETURN HOME
+                current_state = STATE_MAIN_DRO
             elif setup_buttons["RES_TOGGLE"].collidepoint(pos):
                 # Cycle display step tiers smoothly
                 if resolution_tier == 0.0005: resolution_tier = 0.0001
                 elif resolution_tier == 0.0001: resolution_tier = 0.0010
                 else: resolution_tier = 0.0005
+            elif setup_buttons["CAL_X_DISTANCE"].collidepoint(pos):
+                active_scale_calibration_axis = "X"
+            elif setup_buttons["CAL_Z_DISTANCE"].collidepoint(pos):
+                active_scale_calibration_axis = "Z"
+            elif setup_buttons["CAL_X_START"].collidepoint(pos):
+                if DEMO_MODE or serial_connection is None:
+                    scale_calibration_status = "Live Pico connection required for calibration"
+                else:
+                    scale_calibration_start_counts["X"] = x_pulses
+                    active_scale_calibration_axis = "X"
+                    scale_calibration_status = "X start captured; move X by the entered distance"
+            elif setup_buttons["CAL_Z_START"].collidepoint(pos):
+                if DEMO_MODE or serial_connection is None:
+                    scale_calibration_status = "Live Pico connection required for calibration"
+                else:
+                    scale_calibration_start_counts["Z"] = z_pulses
+                    active_scale_calibration_axis = "Z"
+                    scale_calibration_status = "Z start captured; move Z by the entered distance"
+            elif setup_buttons["CAL_X_APPLY"].collidepoint(pos):
+                start_count = scale_calibration_start_counts["X"]
+                distance_text = scale_calibration_distances["X"]
+                if DEMO_MODE or serial_connection is None:
+                    scale_calibration_status = "Live Pico connection required for calibration"
+                elif start_count is None:
+                    scale_calibration_status = "Capture X start before calibrating"
+                elif not distance_text:
+                    scale_calibration_status = "Enter the known X travel first"
+                else:
+                    try:
+                        factor = scale_compensation_for_travel(
+                            float(distance_text), x_pulses - start_count, metric=is_metric
+                        )
+                        set_scale_compensation("X", factor)
+                        scale_calibration_start_counts["X"] = None
+                        scale_calibration_status = f"X factor saved: {factor:.6f}"
+                    except ValueError as error:
+                        scale_calibration_status = str(error)
+                    except OSError:
+                        scale_calibration_status = "Could not save scale calibration"
+            elif setup_buttons["CAL_Z_APPLY"].collidepoint(pos):
+                start_count = scale_calibration_start_counts["Z"]
+                distance_text = scale_calibration_distances["Z"]
+                if DEMO_MODE or serial_connection is None:
+                    scale_calibration_status = "Live Pico connection required for calibration"
+                elif start_count is None:
+                    scale_calibration_status = "Capture Z start before calibrating"
+                elif not distance_text:
+                    scale_calibration_status = "Enter the known Z travel first"
+                else:
+                    try:
+                        factor = scale_compensation_for_travel(
+                            float(distance_text), z_pulses - start_count, metric=is_metric
+                        )
+                        set_scale_compensation("Z", factor)
+                        scale_calibration_start_counts["Z"] = None
+                        scale_calibration_status = f"Z factor saved: {factor:.6f}"
+                    except ValueError as error:
+                        scale_calibration_status = str(error)
+                    except OSError:
+                        scale_calibration_status = "Could not save scale calibration"
             elif setup_buttons["COMP_X_UP"].collidepoint(pos):
-                x_linear_error_comp += 0.0001
+                try:
+                    set_scale_compensation("X", x_linear_error_comp + 0.0001)
+                    scale_calibration_status = "X fine adjustment saved"
+                except OSError:
+                    scale_calibration_status = "Could not save X scale calibration"
             elif setup_buttons["COMP_X_DN"].collidepoint(pos):
-                x_linear_error_comp -= 0.0001
+                try:
+                    set_scale_compensation("X", x_linear_error_comp - 0.0001)
+                    scale_calibration_status = "X fine adjustment saved"
+                except (ValueError, OSError) as error:
+                    scale_calibration_status = str(error) if isinstance(error, ValueError) else "Could not save X scale calibration"
             elif setup_buttons["COMP_Z_UP"].collidepoint(pos):
-                z_linear_error_comp += 0.0001
+                try:
+                    set_scale_compensation("Z", z_linear_error_comp + 0.0001)
+                    scale_calibration_status = "Z fine adjustment saved"
+                except OSError:
+                    scale_calibration_status = "Could not save Z scale calibration"
             elif setup_buttons["COMP_Z_DN"].collidepoint(pos):
-                z_linear_error_comp -= 0.0001
+                try:
+                    set_scale_compensation("Z", z_linear_error_comp - 0.0001)
+                    scale_calibration_status = "Z fine adjustment saved"
+                except (ValueError, OSError) as error:
+                    scale_calibration_status = str(error) if isinstance(error, ValueError) else "Could not save Z scale calibration"
+            elif taper_buttons["CLEAR"].collidepoint(pos):
+                scale_calibration_distances[active_scale_calibration_axis] = ""
+            else:
+                for key, rect in keypad_buttons.items():
+                    if rect.collidepoint(pos):
+                        axis = active_scale_calibration_axis
+                        value = scale_calibration_distances[axis]
+                        if key == "DEL":
+                            scale_calibration_distances[axis] = value[:-1]
+                        elif key == ".":
+                            if "." not in value:
+                                scale_calibration_distances[axis] = value + "."
+                        elif len(value) < 12:
+                            scale_calibration_distances[axis] = value + key
+                        break
 
         # DRAW SETUP INTERFACE DASHBOARD
         draw_industrial_background(screen, width, height)
-        
-        # Section Titles
-        screen.blit(font_medium.render("SYSTEM SETUP MENU", True, YELLOW), (50, 40))
-        
-        # 1. Resolution Management Display block
+        screen.blit(font_medium.render("SYSTEM SETUP / SCALE CALIBRATION", True, YELLOW), (50, 35))
+
         pygame.draw.rect(screen, MED_GREY, setup_buttons["RES_TOGGLE"])
         pygame.draw.rect(screen, WHITE, setup_buttons["RES_TOGGLE"], 2)
-        screen.blit(font_small.render(f"SET STEP RES: {resolution_tier: .4f} in", True, WHITE), (70, 165))
-        
-        # 2. X Axis Scale Calibration Tuning blocks
-        draw_wrapped_text(screen, f"X-Scale Compensation Matrix Factor: {x_linear_error_comp: .4f}", font_small, WHITE, (50, 260), width - 400)
-        pygame.draw.rect(screen, MED_GREY, setup_buttons["COMP_X_UP"])
-        pygame.draw.rect(screen, WHITE, setup_buttons["COMP_X_UP"], 2)
-        screen.blit(font_small.render("+ 0.0001", True, GREEN), (75, 315))
-        
-        pygame.draw.rect(screen, MED_GREY, setup_buttons["COMP_X_DN"])
-        pygame.draw.rect(screen, WHITE, setup_buttons["COMP_X_DN"], 2)
-        screen.blit(font_small.render("- 0.0001", True, RED), (235, 315))
+        resolution_label = font_small.render(f"DISPLAY STEP: {resolution_tier: .4f} in", True, WHITE)
+        screen.blit(resolution_label, resolution_label.get_rect(center=setup_buttons["RES_TOGGLE"].center))
 
-        # 3. Z Axis Scale Calibration Tuning blocks
-        draw_wrapped_text(screen, f"Z-Scale Compensation Matrix Factor: {z_linear_error_comp: .4f}", font_small, WHITE, (50, 410), width - 400)
-        pygame.draw.rect(screen, MED_GREY, setup_buttons["COMP_Z_UP"])
-        pygame.draw.rect(screen, WHITE, setup_buttons["COMP_Z_UP"], 2)
-        screen.blit(font_small.render("+ 0.0001", True, GREEN), (75, 465))
-        
-        pygame.draw.rect(screen, MED_GREY, setup_buttons["COMP_Z_DN"])
-        pygame.draw.rect(screen, WHITE, setup_buttons["COMP_Z_DN"], 2)
-        screen.blit(font_small.render("- 0.0001", True, RED), (235, 465))
+        unit = "mm" if is_metric else "in"
+        for axis, y_position, factor in (
+            ("X", 150, x_linear_error_comp),
+            ("Z", 370, z_linear_error_comp),
+        ):
+            field_rect = setup_buttons[f"CAL_{axis}_DISTANCE"]
+            screen.blit(font_small.render(f"{axis} KNOWN LINEAR TRAVEL ({unit})", True, CYAN),
+                        (field_rect.x, y_position))
+            pygame.draw.rect(screen, MED_GREY, field_rect)
+            pygame.draw.rect(
+                screen,
+                YELLOW if active_scale_calibration_axis == axis else WHITE,
+                field_rect,
+                3,
+            )
+            distance_text = scale_calibration_distances[axis] or "Enter distance"
+            distance_surface = font_small.render(distance_text, True, WHITE)
+            screen.blit(distance_surface, distance_surface.get_rect(center=field_rect.center))
 
-        # 4. Save and Exit button
+            for button_name, label, color in (
+                (f"CAL_{axis}_START", f"CAPTURE {axis} START", CYAN),
+                (f"CAL_{axis}_APPLY", f"CALIBRATE {axis}", GREEN),
+            ):
+                rect = setup_buttons[button_name]
+                pygame.draw.rect(screen, MED_GREY, rect)
+                pygame.draw.rect(screen, color, rect, 2)
+                text = font_small.render(label, True, WHITE)
+                screen.blit(text, text.get_rect(center=rect.center))
+
+            factor_text = font_small.render(f"{axis} correction factor: {factor:.6f}", True, WHITE)
+            screen.blit(factor_text, (50, y_position + 122))
+            for button_name, label, color in (
+                (f"COMP_{axis}_UP", "+ 0.0001", GREEN),
+                (f"COMP_{axis}_DN", "- 0.0001", RED),
+            ):
+                rect = setup_buttons[button_name]
+                pygame.draw.rect(screen, MED_GREY, rect)
+                pygame.draw.rect(screen, WHITE, rect, 2)
+                text = font_small.render(label, True, color)
+                screen.blit(text, text.get_rect(center=rect.center))
+
+        instruction = "Enter measured axis travel; capture start, move that distance, then calibrate. Use linear travel, not X diameter."
+        draw_wrapped_text(screen, instruction, font_small, WHITE, (50, 595), width - 430)
+        if scale_calibration_status:
+            draw_wrapped_text(screen, scale_calibration_status, font_small, YELLOW, (50, 645), width - 430)
+
+        for key, rect in keypad_buttons.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, WHITE, rect, 2)
+            key_text = font_medium.render(key, True, WHITE)
+            screen.blit(key_text, key_text.get_rect(center=rect.center))
+        clear_rect = taper_buttons["CLEAR"]
+        pygame.draw.rect(screen, MED_GREY, clear_rect)
+        pygame.draw.rect(screen, WHITE, clear_rect, 2)
+        clear_text = font_small.render("CLEAR ACTIVE DISTANCE", True, WHITE)
+        screen.blit(clear_text, clear_text.get_rect(center=clear_rect.center))
+
         pygame.draw.rect(screen, RED, setup_buttons["BACK_MAIN"])
         pygame.draw.rect(screen, WHITE, setup_buttons["BACK_MAIN"], 2)
         lbl_save = font_medium.render("SAVE & EXIT", True, WHITE)

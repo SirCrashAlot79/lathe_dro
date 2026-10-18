@@ -1,0 +1,9 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "script",
+  "author": "OpenAI",
+  "description": "Parametric split cradle for a Dell Latitude 7285 on a 1/4-20 arm",
+  "version": "1.0.0",
+  "runOnStartup": false,
+  "supportedOS": "windows"
+}

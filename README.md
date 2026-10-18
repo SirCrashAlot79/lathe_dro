@@ -2,6 +2,14 @@
 
 The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial.
 
+## Screenshots
+
+Captured in demo mode; displayed readings are simulated, not live measurements.
+
+![Lathe DRO main screen](screenshots/dro-main-demo.png)
+
+![Scale calibration setup screen](screenshots/dro-setup-calibration-demo.png)
+
 ## Dell: Ubuntu Server
 
 Pygame needs a local graphical session. A headless SSH session alone cannot display the DRO. If the Server installation has no desktop, install a lightweight X session and touch input support:
@@ -101,4 +109,6 @@ The UF2 image is written to `build-pico2/lathe_dro_pico.uf2`. Hold BOOTSEL while
 - The spindle sensor output uses GPIO 6.
 - Keep Pico GPIO signals within 0-3.3 V; level-shift or condition scale and sensor outputs as required.
 - The DRO currently assumes 25,400 scale counts per inch and four spindle sensor pulses per revolution. Verify these values against the installed scales and sensor before relying on measurements.
+- To calibrate an axis, select INCH/MM on the main screen, open `SETUP`, enter a known linear travel in that unit, and click `CAPTURE X START` or `CAPTURE Z START` at the starting point. Move that axis by the measured distance, then click `CALIBRATE X` or `CALIBRATE Z`. Use a long, trusted measurement and approach both endpoints consistently to reduce measurement error and backlash.
+- Calibration uses raw count change, independent of zero and RAD/DIA display modes. For X, enter physical cross-slide (radial) travel, not the doubled diameter display. The correction factors and fine adjustments persist in `scale_calibration.json` beside the Python app; scale count convention and accuracy still need verification against the installed hardware.
 - Tool touch-offs are stored in `tool_offsets.json` beside the Python app. Capture T-1 at the reference datum, then capture each other tool at the same datum.

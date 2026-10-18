@@ -10,13 +10,17 @@
 #define SCALE_X_PIN_A   2   // X-Axis Channel A (Pin 3 is Channel B)
 #define SCALE_Z_PIN_A   4   // Z-Axis Channel A (Pin 5 is Channel B)
 
-// Spindle RPM Proximity Sensor
-#define TACH_PIN        6   // Connect to Hall sensor Module OUT
+// Spindle tach input: active-low, 0-3.3 V logic only. The PINDA's 5 V output
+// must pass through a suitable level interface before reaching this GPIO.
+#define TACH_PIN        6
+static constexpr uint32_t TACH_PULSES_PER_REV = 4;
+static constexpr uint32_t TACH_TIMEOUT_US = 1500000;
 
 static volatile int32_t x_pulse_count = 0;
 static volatile int32_t z_pulse_count = 0;
 static volatile uint32_t last_tach_pulse_time = 0;
 static volatile uint32_t pulse_delta = 0;
+static volatile bool tach_pulse_initialized = false;
 
 static uint8_t last_x_state = 0;
 static uint8_t last_z_state = 0;
@@ -51,22 +55,30 @@ static void pio_irq_handler() {
     process_axis_samples(pio0, 1, &z_pulse_count, &last_z_state, &z_state_initialized);
 }
 
-// Spindle 4-Magnet Timing Interrupt
+// Capture one falling edge per tach target. The first edge establishes a baseline.
 void tach_interrupt_handler(uint gpio, uint32_t events) {
+    (void)gpio;
+    (void)events;
     uint32_t current_time = time_us_32();
-    pulse_delta = current_time - last_tach_pulse_time;
+    if (tach_pulse_initialized) {
+        const uint32_t elapsed = current_time - last_tach_pulse_time;
+        pulse_delta = elapsed <= TACH_TIMEOUT_US ? elapsed : 0;
+    } else {
+        tach_pulse_initialized = true;
+        pulse_delta = 0;
+    }
     last_tach_pulse_time = current_time;
 }
 
 int main() {
     stdio_init_all();
-    
+
     stdio_set_translate_crlf(&stdio_usb, false);
 
     // 1. Initialize Spindle RPM Pin
     gpio_init(TACH_PIN);
     gpio_set_dir(TACH_PIN, GPIO_IN);
-    gpio_pull_up(TACH_PIN); // Fallback if level shifter lacks pullups
+    gpio_pull_up(TACH_PIN); // Internal 3.3 V pull-up; this is not 5 V level protection.
     gpio_set_irq_enabled_with_callback(TACH_PIN, GPIO_IRQ_EDGE_FALL, true, &tach_interrupt_handler);
 
     // 2. Initialize the two PIO state machines and their shared RX-FIFO IRQ.
@@ -90,11 +102,14 @@ int main() {
     while (true) {
         uint32_t now = time_us_32() / 1000u;
 
-        // Four sensor pulses per revolution; stop displaying stale RPM after 1.5 seconds.
-        if (time_us_32() - last_tach_pulse_time > 1500000) {
+        // Ignore the first edge interval and clear RPM after a long gap between targets.
+        const uint32_t tach_now_us = time_us_32();
+        const uint32_t tach_last_pulse_us = last_tach_pulse_time;
+        const uint32_t tach_period_us = pulse_delta;
+        if (!tach_pulse_initialized || tach_now_us - tach_last_pulse_us > TACH_TIMEOUT_US) {
             current_rpm = 0;
-        } else if (pulse_delta > 0) {
-            current_rpm = 15000000u / pulse_delta;
+        } else if (tach_period_us > 0) {
+            current_rpm = 60000000u / (tach_period_us * TACH_PULSES_PER_REV);
         }
 
         // 4. Stream Packet to Ubuntu Laptop at 60Hz Interval (Every 16ms)

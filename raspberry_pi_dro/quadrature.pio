@@ -1,0 +1,31 @@
+.program quadrature
+; Push each changed A/B state; the CPU decodes direction from consecutive states.
+    mov isr, null
+    in pins, 2
+    mov y, isr
+    push noblock
+loop:
+    mov isr, null
+    in pins, 2
+    mov x, isr
+    jmp x!=y change
+    jmp loop
+change:
+    mov y, x
+    push noblock
+    jmp loop
+
+% c-sdk {
+static inline void quadrature_program_init(PIO pio, uint sm, uint offset, uint pin_a) {
+    pio_sm_config c = quadrature_program_get_default_config(offset);
+
+    sm_config_set_in_pins(&c, pin_a);
+    sm_config_set_in_shift(&c, true, false, 32);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
+    pio_gpio_init(pio, pin_a);
+    pio_gpio_init(pio, pin_a + 1);
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_a, 2, false);
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

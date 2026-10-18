@@ -13,7 +13,10 @@ from lathe_dro_pro import (
     request_system_poweroff,
     round_to_precision,
     save_tool_touch_positions,
+    load_scale_calibration,
+    save_scale_calibration,
     shoulder_distance,
+    scale_compensation_for_travel,
     spindle_rpm_for_surface_speed,
     thread_setting_for,
     tool_offset_for,
@@ -74,6 +77,31 @@ def test_round_to_precision_accepts_custom_inch_resolution():
 def test_round_to_precision_rejects_nonpositive_resolution():
     with pytest.raises(ValueError):
         round_to_precision(1.0, metric_mode=False, resolution=0)
+
+
+def test_scale_compensation_for_travel_calibrates_nominal_counts():
+    assert scale_compensation_for_travel(1.0, 25400) == pytest.approx(1.0)
+    assert scale_compensation_for_travel(25.4, -25400, metric=True) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    "distance, count_delta, metric",
+    [(0, 1000, False), (1, 0, False), (-1, 1000, False)],
+)
+def test_scale_compensation_for_travel_rejects_invalid_measurements(
+    distance, count_delta, metric
+):
+    with pytest.raises(ValueError):
+        scale_compensation_for_travel(distance, count_delta, metric=metric)
+
+
+def test_scale_calibration_persists_and_ignores_invalid_factors(tmp_path):
+    path = tmp_path / "scale_calibration.json"
+    save_scale_calibration(path, {"x": 1.002, "z": 0.998})
+    assert load_scale_calibration(path) == {"x": 1.002, "z": 0.998}
+
+    path.write_text('{"x": -1, "z": "invalid"}', encoding="utf-8")
+    assert load_scale_calibration(path) == {"x": 1.0, "z": 1.0}
 
 
 def test_compound_rest_angle_is_half_taper_angle():
