@@ -10,8 +10,8 @@
 #define SCALE_X_PIN_A   2   // X-Axis Channel A (Pin 3 is Channel B)
 #define SCALE_Z_PIN_A   4   // Z-Axis Channel A (Pin 5 is Channel B)
 
-// Spindle tach input: active-low, 0-3.3 V logic only. The PINDA's 5 V output
-// must pass through a suitable level interface before reaching this GPIO.
+// Spindle tach input for LJ12A3-4-Z/BX NPN NO sensor. Power sensor from 6-36 V;
+// GP6 may use its 3.3 V pull-up only if the sensor output is verified open-collector.
 #define TACH_PIN        6
 static constexpr uint32_t TACH_PULSES_PER_REV = 4;
 static constexpr uint32_t TACH_TIMEOUT_US = 1500000;
@@ -78,7 +78,7 @@ int main() {
     // 1. Initialize Spindle RPM Pin
     gpio_init(TACH_PIN);
     gpio_set_dir(TACH_PIN, GPIO_IN);
-    gpio_pull_up(TACH_PIN); // Internal 3.3 V pull-up; this is not 5 V level protection.
+    gpio_pull_up(TACH_PIN); // 3.3 V pull-up for verified NPN sinking/open-collector output.
     gpio_set_irq_enabled_with_callback(TACH_PIN, GPIO_IRQ_EDGE_FALL, true, &tach_interrupt_handler);
 
     // 2. Initialize the two PIO state machines and their shared RX-FIFO IRQ.
