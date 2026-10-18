@@ -202,7 +202,7 @@ if __name__ == "__main__":
         display_screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     else:
         display_screen = pygame.display.set_mode((1280, 720))
-    pygame.display.set_caption("South Bend 10k Pro Toolroom DRO")
+    pygame.display.set_caption("Lathe DRO")
     width, height = 1280, 720
     screen = pygame.Surface((width, height))
     display_width, display_height = display_screen.get_size()
@@ -289,7 +289,6 @@ STATE_TOOL_SETUP = 2
 STATE_BOOT = 3
 STATE_TAPER = 4
 STATE_THREAD = 5
-STATE_SPEED = 6
 STATE_COORD = 7
 STATE_BORING = 8
 STATE_POWER_CONFIRM = 9
@@ -514,7 +513,6 @@ main_buttons = {
     "TOOL_SETUP": pygame.Rect(col1_x, int(height*0.44), btn_w, btn_h),
     "FEED":    pygame.Rect(col2_x, int(height*0.44), btn_w, btn_h),
     "TAPER":   pygame.Rect(col1_x, int(height*0.58), btn_w, btn_h),
-    "SPEED":   pygame.Rect(col2_x, int(height*0.58), btn_w, btn_h),
     "COORD":   pygame.Rect(col1_x, int(height*0.72), btn_w, btn_h),
     "SETUP":   pygame.Rect(col2_x, int(height*0.72), btn_w, btn_h)
 }
@@ -609,23 +607,6 @@ thread_buttons = {
     "CLEAR": taper_buttons["CLEAR"],
     "BACK": taper_buttons["BACK"]
 }
-speed_material_names = tuple(HSS_SURFACE_SPEED_SFM)
-speed_material_index = 0
-speed_values = {"diameter": "", "sfm": str(HSS_SURFACE_SPEED_SFM[speed_material_names[0]])}
-active_speed_field = "diameter"
-speed_fields = {
-    "diameter": pygame.Rect(50, 170, 500, 70),
-    "sfm": pygame.Rect(50, 300, 500, 70)
-}
-speed_material_button = pygame.Rect(50, 390, 500, 50)
-speed_drive_button = pygame.Rect(50, 450, 500, 55)
-speed_range_button = pygame.Rect(50, 515, 500, 55)
-speed_drive_mode = "BELT DRIVE"
-speed_range_mode = "LOW RANGE"
-speed_buttons = {
-    "CLEAR": taper_buttons["CLEAR"],
-    "BACK": taper_buttons["BACK"]
-}
 coord_mode = "MIDPOINT"
 coord_values = {"first": "", "second": "", "pcd": "", "holes": "", "start": "0"}
 COORD_INPUT_MAX_LENGTH = {"first": 12, "second": 12, "pcd": 8, "holes": 2, "start": 8}
@@ -709,24 +690,8 @@ while running:
             current_state = STATE_MAIN_DRO
         else:
             draw_industrial_background(screen, width, height)
-            center_x = width // 2
-            logo_text = font_logo.render("SOUTH BEND", True, WHITE)
-            screen.blit(logo_text, logo_text.get_rect(center=(center_x, int(height * 0.39))))
-            pygame.draw.line(screen, YELLOW, (int(width * 0.28), int(height * 0.49)), (int(width * 0.72), int(height * 0.49)), 3)
-            subtitle = font_medium.render("LATHE DIGITAL READOUT", True, YELLOW)
-            screen.blit(subtitle, subtitle.get_rect(center=(center_x, int(height * 0.57))))
-
-            boot_status = "DEMO STARTING" if DEMO_MODE else "CONNECTING TO PICO"
-            status_text = font_small.render(boot_status, True, CYAN)
-            screen.blit(status_text, status_text.get_rect(center=(center_x, int(height * 0.68))))
-
-            bar_width = int(width * 0.46)
-            bar_height = max(8, int(height * 0.014))
-            bar_x = (width - bar_width) // 2
-            bar_y = int(height * 0.76)
-            pygame.draw.rect(screen, GREY, (bar_x, bar_y, bar_width, bar_height), border_radius=2)
-            fill_width = int(bar_width * elapsed_ms / BOOT_DURATION_MS)
-            pygame.draw.rect(screen, CYAN, (bar_x, bar_y, fill_width, bar_height), border_radius=2)
+            title = font_large.render("LATHE DRO", True, WHITE)
+            screen.blit(title, title.get_rect(center=(width // 2, height // 2)))
     elif current_state == STATE_POWER_CONFIRM:
         if clicked:
             if power_confirm_buttons["CONFIRM"].collidepoint(pos):
@@ -768,8 +733,6 @@ while running:
                 current_state = STATE_TAPER
             elif main_buttons["FEED"].collidepoint(pos):
                 current_state = STATE_THREAD
-            elif main_buttons["SPEED"].collidepoint(pos):
-                current_state = STATE_SPEED
             elif main_buttons["COORD"].collidepoint(pos):
                 current_state = STATE_COORD
             elif main_buttons["DIA"].collidepoint(pos):
@@ -1137,120 +1100,6 @@ while running:
             draw_wrapped_text(screen, line, font_small, color, (50, 440 + line_index * 48), keypad_x - 70)
 
         back_rect = coord_buttons["BACK"]
-        pygame.draw.rect(screen, RED, back_rect)
-        pygame.draw.rect(screen, WHITE, back_rect, 2)
-        back_text = font_medium.render("BACK", True, WHITE)
-        screen.blit(back_text, back_text.get_rect(center=back_rect.center))
-
-    elif current_state == STATE_SPEED:
-        if clicked:
-            if speed_buttons["BACK"].collidepoint(pos):
-                current_state = STATE_MAIN_DRO
-            elif speed_drive_button.collidepoint(pos):
-                speed_drive_mode = "BACK GEAR" if speed_drive_mode == "BELT DRIVE" else "BELT DRIVE"
-            elif speed_range_button.collidepoint(pos):
-                speed_range_mode = "HIGH RANGE" if speed_range_mode == "LOW RANGE" else "LOW RANGE"
-            elif speed_material_button.collidepoint(pos):
-                speed_material_index = (speed_material_index + 1) % len(speed_material_names)
-                material_name = speed_material_names[speed_material_index]
-                speed_values["sfm"] = str(HSS_SURFACE_SPEED_SFM[material_name])
-            else:
-                for field_name, rect in speed_fields.items():
-                    if rect.collidepoint(pos):
-                        active_speed_field = field_name
-                        break
-                else:
-                    if speed_buttons["CLEAR"].collidepoint(pos):
-                        speed_values[active_speed_field] = ""
-                    else:
-                        for key, rect in keypad_buttons.items():
-                            if rect.collidepoint(pos):
-                                value = speed_values[active_speed_field]
-                                if key == "DEL":
-                                    speed_values[active_speed_field] = value[:-1]
-                                elif key == ".":
-                                    if "." not in value:
-                                        speed_values[active_speed_field] = value + "."
-                                elif len(value) < 12:
-                                    speed_values[active_speed_field] = value + key
-                                break
-
-        draw_industrial_background(screen, width, height)
-        screen.blit(font_medium.render("CUTTING SPEED / RPM", True, YELLOW), (50, 35))
-        diameter_unit = "mm" if is_metric else "in"
-        speed_labels = {"diameter": f"WORK DIAMETER ({diameter_unit})", "sfm": "SURFACE SPEED (SFM)"}
-        for field_name, rect in speed_fields.items():
-            label = font_small.render(speed_labels[field_name], True, CYAN)
-            screen.blit(label, (rect.x, rect.y - 32))
-            pygame.draw.rect(screen, MED_GREY, rect)
-            pygame.draw.rect(screen, YELLOW if field_name == active_speed_field else WHITE, rect, 3)
-            value_text = font_medium.render(speed_values[field_name] or "0", True, WHITE)
-            screen.blit(value_text, value_text.get_rect(midleft=(rect.x + 20, rect.centery)))
-
-        pygame.draw.rect(screen, MED_GREY, speed_material_button)
-        pygame.draw.rect(screen, WHITE, speed_material_button, 2)
-        material_name = speed_material_names[speed_material_index]
-        material_text = font_small.render(f"HSS PRESET: {material_name}  {HSS_SURFACE_SPEED_SFM[material_name]} SFM", True, WHITE)
-        screen.blit(material_text, material_text.get_rect(center=speed_material_button.center))
-
-        for rect, label in (
-            (speed_drive_button, f"DRIVE: {speed_drive_mode}"),
-            (speed_range_button, f"RANGE: {speed_range_mode}"),
-        ):
-            pygame.draw.rect(screen, MED_GREY, rect)
-            pygame.draw.rect(screen, CYAN, rect, 2)
-            control_text = font_small.render(label, True, WHITE)
-            screen.blit(control_text, control_text.get_rect(center=rect.center))
-
-        for key, rect in keypad_buttons.items():
-            pygame.draw.rect(screen, MED_GREY, rect)
-            pygame.draw.rect(screen, WHITE, rect, 2)
-            key_text = font_medium.render(key, True, WHITE)
-            screen.blit(key_text, key_text.get_rect(center=rect.center))
-        clear_rect = speed_buttons["CLEAR"]
-        pygame.draw.rect(screen, MED_GREY, clear_rect)
-        pygame.draw.rect(screen, WHITE, clear_rect, 2)
-        clear_text = font_small.render("CLEAR ACTIVE FIELD", True, WHITE)
-        screen.blit(clear_text, clear_text.get_rect(center=clear_rect.center))
-
-        if speed_values["diameter"] and speed_values["sfm"]:
-            try:
-                target_rpm = spindle_rpm_for_surface_speed(
-                    float(speed_values["diameter"]), float(speed_values["sfm"]), metric=is_metric
-                )
-                step_recommendation = recommend_spindle_step(target_rpm, speed_drive_mode, speed_range_mode)
-                speed_result = f"TARGET: {target_rpm:.0f} RPM"
-                speed_result_color = GREEN
-                if step_recommendation is None:
-                    available = SPINDLE_SPEED_STEPS[(speed_drive_mode, speed_range_mode)]
-                    recommendation_text = f"BELOW RANGE: minimum is Step 1 at {available[0]} RPM"
-                    recommendation_color = RED
-                else:
-                    maximum_text = " MAX" if step_recommendation["at_maximum"] else ""
-                    recommendation_text = (
-                        f"STEP {step_recommendation['step']} / "
-                        f"{step_recommendation['spindle'].upper()} PULLEY: "
-                        f"{step_recommendation['rpm']} RPM{maximum_text}"
-                    )
-                    recommendation_color = CYAN
-            except ValueError as error:
-                speed_result = str(error)
-                speed_result_color = RED
-                recommendation_text = ""
-                recommendation_color = RED
-        else:
-            speed_result = "Enter work diameter and surface speed."
-            speed_result_color = WHITE
-            recommendation_text = ""
-            recommendation_color = WHITE
-        draw_wrapped_text(screen, speed_result, font_small, speed_result_color, (50, 585), keypad_x - 70)
-        draw_wrapped_text(screen, recommendation_text, font_small, recommendation_color, (50, 615), keypad_x - 70)
-        if speed_drive_mode == "BACK GEAR" and speed_range_mode == "HIGH RANGE":
-            note_text = "HIGH-RANGE BACK-GEAR values are starred on the supplied chart; verify its footnote."
-        else:
-            note_text = "Change belt or engage back gear only with the spindle stopped."
-        draw_wrapped_text(screen, note_text, font_small, WHITE, (50, 650), width - 500)
-        back_rect = speed_buttons["BACK"]
         pygame.draw.rect(screen, RED, back_rect)
         pygame.draw.rect(screen, WHITE, back_rect, 2)
         back_text = font_medium.render("BACK", True, WHITE)

@@ -21,6 +21,8 @@ from lathe_dro_pro import (
     thread_setting_for,
     tool_offset_for,
     tool_corrected_x_count,
+    tool_x_offset_to_counts,
+    tool_position_with_manual_x_offset,
     wrap_text,
 )
 
@@ -268,6 +270,31 @@ def test_tool_offset_is_relative_to_t1_master():
 def test_tool_offset_requires_master_and_tool_touch_off():
     assert tool_offset_for(2, {2: (1040, 1970)}) is None
     assert tool_offset_for(3, {1: (1000, 2000)}) is None
+
+
+def test_tool_x_offset_to_counts_respects_units_diameter_mode_and_sign():
+    assert tool_x_offset_to_counts(0.5, diameter_mode=True) == 6350
+    assert tool_x_offset_to_counts(-25.4, metric=True) == -25400
+    assert tool_x_offset_to_counts(1.0, linear_error_comp=1.01) == 25149
+
+
+@pytest.mark.parametrize("factor", [0, -1])
+def test_tool_x_offset_to_counts_rejects_invalid_compensation(factor):
+    with pytest.raises(ValueError):
+        tool_x_offset_to_counts(1.0, linear_error_comp=factor)
+
+
+def test_manual_tool_x_offset_is_relative_to_t1_and_preserves_z():
+    positions = {1: (1000, 2000), 2: (1100, 2050)}
+    assert tool_position_with_manual_x_offset(2, -75, positions) == (925, 2050)
+    assert tool_position_with_manual_x_offset(3, 125, positions) == (1125, 2000)
+
+
+def test_manual_tool_x_offset_requires_t1_and_nonmaster_tool():
+    with pytest.raises(ValueError):
+        tool_position_with_manual_x_offset(2, 10, {})
+    with pytest.raises(ValueError):
+        tool_position_with_manual_x_offset(1, 10, {1: (100, 200)})
 
 
 def test_tool_touch_positions_persist(tmp_path):

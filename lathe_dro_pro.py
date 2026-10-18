@@ -172,6 +172,20 @@ def set_scale_compensation(axis, factor, path=SCALE_CALIBRATION_FILE):
         z_linear_error_comp = updated_factors["z"]
 
 
+def tool_x_offset_to_counts(offset, metric=False, diameter_mode=False,
+                            linear_error_comp=1.0, pulses_per_inch=PULSES_PER_INCH):
+    """Convert a displayed, signed X tool offset to raw encoder counts."""
+    values = (offset, linear_error_comp, pulses_per_inch)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("tool offset and calibration values must be finite")
+    if linear_error_comp <= 0 or pulses_per_inch <= 0:
+        raise ValueError("calibration factor and counts per inch must be positive")
+
+    radial_distance = offset / 2.0 if diameter_mode else offset
+    distance_inches = radial_distance / 25.4 if metric else radial_distance
+    return round(distance_inches * pulses_per_inch / linear_error_comp)
+
+
 def tool_offset_for(tool_id, positions):
     reference = positions.get(1)
     tool_position = positions.get(tool_id)
@@ -185,6 +199,18 @@ def tool_corrected_x_count(x_pulses, tool_id, positions):
     if offset is None:
         return None
     return x_pulses - offset[0]
+
+
+def tool_position_with_manual_x_offset(tool_id, offset_counts, positions):
+    """Build a tool's count position from its signed offset to the T-1 master."""
+    if not isinstance(tool_id, int) or not 2 <= tool_id <= 9:
+        raise ValueError("manual X offsets require a tool ID from T-2 through T-9")
+    master_position = positions.get(1)
+    if master_position is None:
+        raise ValueError("capture T-1 master reference first")
+    current_position = positions.get(tool_id)
+    z_count = current_position[1] if current_position is not None else master_position[1]
+    return master_position[0] + int(offset_counts), z_count
 
 if __name__ == "__main__":
     argument_parser = argparse.ArgumentParser(description="Lathe digital readout")
@@ -301,6 +327,9 @@ x_pulses, z_pulses, rpm = 0, 0, 0
 x_abs_zero, z_abs_zero = 0, 0
 x_inc_zero, z_inc_zero = 0, 0
 tool_touch_positions = load_tool_touch_positions()
+manual_tool_x_offset_text = ""
+manual_tool_x_offset_tool_id = None
+manual_tool_x_offset_sign = 1
 is_diameter_mode = True
 is_metric = False
 is_abs_mode = True
@@ -562,6 +591,9 @@ tool_setup_buttons = {
     "PREVIOUS": pygame.Rect(60, 215, 140, 70),
     "NEXT": pygame.Rect(220, 215, 140, 70),
     "CAPTURE": pygame.Rect(60, 325, 300, 80),
+    "X_OFFSET_FIELD": pygame.Rect(50, 620, 270, 54),
+    "X_OFFSET_SIGN": pygame.Rect(330, 620, 90, 54),
+    "X_OFFSET_APPLY": pygame.Rect(430, 620, 280, 54),
     "BACK": pygame.Rect(width - 350, height - 120, 300, 80)
 }
 tool_readout_width = int(width * 0.18)
@@ -575,6 +607,27 @@ tool_zero_buttons = {
     "X": pygame.Rect(tool_readout_rects["X"].x, 130, tool_readout_width, 52),
     "Z": pygame.Rect(tool_readout_rects["Z"].x, 130, tool_readout_width, 52)
 }
+tool_offset_keypad_buttons = {}
+tool_offset_keypad_x = 800
+tool_offset_keypad_y = 198
+tool_offset_keypad_w = 108
+tool_offset_keypad_h = 48
+tool_offset_keypad_gap_x = 10
+tool_offset_keypad_gap_y = 8
+for tool_keypad_index, tool_keypad_key in enumerate(("7", "8", "9", "4", "5", "6", "1", "2", "3", ".", "0", "DEL")):
+    tool_keypad_row, tool_keypad_column = divmod(tool_keypad_index, 3)
+    tool_offset_keypad_buttons[tool_keypad_key] = pygame.Rect(
+        tool_offset_keypad_x + tool_keypad_column * (tool_offset_keypad_w + tool_offset_keypad_gap_x),
+        tool_offset_keypad_y + tool_keypad_row * (tool_offset_keypad_h + tool_offset_keypad_gap_y),
+        tool_offset_keypad_w,
+        tool_offset_keypad_h,
+    )
+tool_offset_clear_button = pygame.Rect(
+    tool_offset_keypad_x,
+    tool_offset_keypad_y + 4 * (tool_offset_keypad_h + tool_offset_keypad_gap_y),
+    3 * tool_offset_keypad_w + 2 * tool_offset_keypad_gap_x,
+    48,
+)
 
 taper_values = {"large": "", "small": "", "length": ""}
 active_taper_field = "large"
@@ -1593,8 +1646,29 @@ while running:
                 current_state = STATE_MAIN_DRO
             elif tool_setup_buttons["PREVIOUS"].collidepoint(pos):
                 current_tool_id = 9 if current_tool_id == 1 else current_tool_id - 1
+                manual_tool_x_offset_text = ""
+                manual_tool_x_offset_tool_id = None
+                manual_tool_x_offset_sign = 1
             elif tool_setup_buttons["NEXT"].collidepoint(pos):
                 current_tool_id = 1 if current_tool_id >= 9 else current_tool_id + 1
+                manual_tool_x_offset_text = ""
+                manual_tool_x_offset_tool_id = None
+                manual_tool_x_offset_sign = 1
+            elif tool_setup_buttons["X_OFFSET_FIELD"].collidepoint(pos):
+                if current_tool_id == 1:
+                    connection_status = "T-1 is the master; choose T-2 through T-9"
+                else:
+                    manual_tool_x_offset_text = ""
+                    manual_tool_x_offset_tool_id = current_tool_id
+                    manual_tool_x_offset_sign = 1
+                    connection_status = f"Enter T-{current_tool_id} X offset relative to T-1"
+            elif tool_setup_buttons["X_OFFSET_SIGN"].collidepoint(pos):
+                if current_tool_id != 1:
+                    if manual_tool_x_offset_tool_id != current_tool_id:
+                        manual_tool_x_offset_text = ""
+                        manual_tool_x_offset_tool_id = current_tool_id
+                        manual_tool_x_offset_sign = 1
+                    manual_tool_x_offset_sign *= -1
             elif tool_zero_buttons["X"].collidepoint(pos):
                 if is_abs_mode:
                     offset = tool_offset_for(current_tool_id, tool_touch_positions)
@@ -1619,6 +1693,51 @@ while running:
                         connection_status = f"T-{current_tool_id} touch-off saved"
                     except OSError:
                         connection_status = "Could not save tool touch-off"
+            elif tool_setup_buttons["X_OFFSET_APPLY"].collidepoint(pos):
+                if DEMO_MODE:
+                    connection_status = "Live Pico required for tool offset changes"
+                elif current_tool_id == 1:
+                    connection_status = "T-1 is the master; choose T-2 through T-9"
+                elif 1 not in tool_touch_positions:
+                    connection_status = "Capture T-1 master reference first"
+                elif manual_tool_x_offset_tool_id != current_tool_id or not manual_tool_x_offset_text:
+                    connection_status = "Select the X offset field and enter a value first"
+                else:
+                    try:
+                        entered_offset = float(manual_tool_x_offset_text) * manual_tool_x_offset_sign
+                        offset_counts = tool_x_offset_to_counts(
+                            entered_offset,
+                            metric=is_metric,
+                            diameter_mode=is_diameter_mode,
+                            linear_error_comp=x_linear_error_comp,
+                        )
+                        updated_positions = dict(tool_touch_positions)
+                        updated_positions[current_tool_id] = tool_position_with_manual_x_offset(
+                            current_tool_id, offset_counts, tool_touch_positions
+                        )
+                        save_tool_touch_positions(TOOL_OFFSETS_FILE, updated_positions)
+                        tool_touch_positions.clear()
+                        tool_touch_positions.update(updated_positions)
+                        connection_status = f"T-{current_tool_id} manual X offset saved"
+                    except ValueError as error:
+                        connection_status = str(error)
+                    except OSError:
+                        connection_status = "Could not save tool touch-off"
+            elif tool_offset_clear_button.collidepoint(pos):
+                if manual_tool_x_offset_tool_id == current_tool_id:
+                    manual_tool_x_offset_text = ""
+            else:
+                if manual_tool_x_offset_tool_id == current_tool_id:
+                    for key, rect in tool_offset_keypad_buttons.items():
+                        if rect.collidepoint(pos):
+                            if key == "DEL":
+                                manual_tool_x_offset_text = manual_tool_x_offset_text[:-1]
+                            elif key == ".":
+                                if "." not in manual_tool_x_offset_text:
+                                    manual_tool_x_offset_text += "."
+                            elif len(manual_tool_x_offset_text) < 12:
+                                manual_tool_x_offset_text += key
+                            break
 
         draw_industrial_background(screen, width, height)
         screen.blit(font_medium.render("TOOL OFFSET SETUP", True, YELLOW), (50, 40))
@@ -1675,6 +1794,54 @@ while running:
             offset_text = f"X OFFSET {x_offset:.4f} {unit}    Z OFFSET {z_offset:.4f} {unit}"
         draw_wrapped_text(screen, offset_text, font_small, CYAN, (50, 500), width - 400)
         draw_wrapped_text(screen, connection_status, font_small, YELLOW, (50, 540), width - 400)
+        offset_field = tool_setup_buttons["X_OFFSET_FIELD"]
+        pygame.draw.rect(screen, MED_GREY, offset_field)
+        pygame.draw.rect(screen, YELLOW if manual_tool_x_offset_tool_id == current_tool_id else WHITE,
+                         offset_field, 3)
+        if current_tool_id == 1:
+            manual_offset_display = "T-1 master reference"
+        elif manual_tool_x_offset_tool_id == current_tool_id:
+            if manual_tool_x_offset_text:
+                sign_text = "+" if manual_tool_x_offset_sign > 0 else "-"
+                manual_offset_display = f"{sign_text}{manual_tool_x_offset_text} {unit}"
+            else:
+                manual_offset_display = "Enter offset vs T-1"
+        elif tool_offset is not None:
+            saved_x_offset = tool_offset[0] / PULSES_PER_INCH * x_linear_error_comp
+            if is_metric:
+                saved_x_offset *= 25.4
+            if is_diameter_mode:
+                saved_x_offset *= 2
+            manual_offset_display = f"{saved_x_offset:+.4f} {unit}"
+        else:
+            manual_offset_display = "Tap to enter X offset"
+        offset_value = font_small.render(manual_offset_display, True, WHITE)
+        screen.blit(offset_value, offset_value.get_rect(center=offset_field.center))
+
+        sign_rect = tool_setup_buttons["X_OFFSET_SIGN"]
+        pygame.draw.rect(screen, MED_GREY, sign_rect)
+        pygame.draw.rect(screen, WHITE, sign_rect, 2)
+        sign_label = "X+" if manual_tool_x_offset_sign > 0 else "X-"
+        sign_text = font_small.render(sign_label, True, CYAN)
+        screen.blit(sign_text, sign_text.get_rect(center=sign_rect.center))
+
+        apply_rect = tool_setup_buttons["X_OFFSET_APPLY"]
+        apply_color = MED_GREY if DEMO_MODE or current_tool_id == 1 else GREEN
+        pygame.draw.rect(screen, apply_color, apply_rect)
+        pygame.draw.rect(screen, WHITE, apply_rect, 2)
+        apply_text = font_small.render("SAVE X OFFSET", True, WHITE)
+        screen.blit(apply_text, apply_text.get_rect(center=apply_rect.center))
+
+        for key, rect in tool_offset_keypad_buttons.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, WHITE, rect, 2)
+            key_text = font_small.render(key, True, WHITE)
+            screen.blit(key_text, key_text.get_rect(center=rect.center))
+        clear_rect = tool_offset_clear_button
+        pygame.draw.rect(screen, MED_GREY, clear_rect)
+        pygame.draw.rect(screen, WHITE, clear_rect, 2)
+        clear_text = font_small.render("CLEAR X OFFSET", True, WHITE)
+        screen.blit(clear_text, clear_text.get_rect(center=clear_rect.center))
 
         capture_rect = tool_setup_buttons["CAPTURE"]
         capture_color = MED_GREY if DEMO_MODE else GREEN

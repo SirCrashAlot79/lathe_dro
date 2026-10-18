@@ -61,7 +61,7 @@ For a windowed demo without the Pico:
 - `SPEED` estimates spindle RPM from work diameter and surface speed. Editable HSS starting presets are mild steel (80 SFM), aluminum (200 SFM), stainless steel (50 SFM), and cast iron (60 SFM). These are approximate starting points; the result is advisory only and does not control the spindle. Choose a safe speed available on the machine and verify it for the actual tool, material, workholding, and setup.
 - `TAPER` calculates the compound-rest half-angle from large diameter, small diameter, and axial length.
 - `COORD` calculates a midpoint, shoulder-to-shoulder distance, or up to 24 bolt-circle coordinates relative to the pattern center. Bolt-circle start angle is measured counterclockwise from +X.
-- `TOOL SET` stores touch-off offsets in `tool_offsets.json` beside the Python app.
+- `TOOL SET` stores offsets in `tool_offsets.json` beside the Python app. Capture T-1 as the master; for T-2 through T-9 you can capture both axes or enter a signed X offset relative to T-1 with the on-screen keypad. Manual X entry uses the current INCH/MM and RAD/DIA settings and preserves any captured Z offset.
 - `BORING` accepts the initial drilled diameter, captures the live X position at that starting bore size, and adds twice the calibrated radial X travel to display the estimated current bore diameter. Choose whether X+ or X- increases diameter to match the installed scale. Capture is disabled in demo mode.
 - `POWER` asks for confirmation, then requests Ubuntu power-off. It does not stop the lathe. On Ubuntu, grant only the required command with `sudo visudo -f /etc/sudoers.d/lathe-dro-poweroff` and add `YOUR_USERNAME ALL=(root) NOPASSWD: /usr/bin/systemctl poweroff`.
 

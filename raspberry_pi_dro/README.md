@@ -2,6 +2,14 @@
 
 A separate Raspberry Pi host build of the Lathe DRO. It runs the existing Pygame interface fullscreen on Raspberry Pi OS Desktop and communicates with the same Pico 2 firmware over USB serial.
 
+## Screenshots
+
+Captured in demo mode; values are simulated. The Pi version omits the cutting-speed calculator screen but retains the live spindle RPM readout on the main DRO screen.
+
+![Pi DRO boot screen](screenshots/boot-demo.png)
+
+![Pi DRO main screen](screenshots/main-demo.png)
+
 ## Suggested Hardware
 
 - Raspberry Pi 4 Model B, 4 GB RAM. The DRO is light enough for a Pi 4; a Pi 5 also works but is not required.
