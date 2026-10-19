@@ -1,0 +1,9 @@
+{
+  "autodeskProduct": "Fusion360",
+  "type": "script",
+  "author": "",
+  "description": "Two-piece case for a Pico 2 and two DB9 female connectors",
+  "version": "1.0.0",
+  "runOnStartup": false,
+  "supportedOS": "windows"
+}

@@ -111,12 +111,13 @@ def _extrude(component, profiles, depth_mm, operation, name):
 
 
 def _frame_outline(side):
-    outer_x = TABLET_WIDTH / 2.0 + FIT_CLEARANCE
+    # The plate extends under the full corner wrap footprint so the wrap walls join it.
+    outer_x = TABLET_WIDTH / 2.0 + FIT_CLEARANCE + CLIP_WALL_THICKNESS
     inner_x = outer_x - SIDE_RAIL_WIDTH
     attach_x = HUB_BOLT_X - HUB_OVERLAP
     half_strut = STRUT_WIDTH / 2.0
-    y_min = -TABLET_HEIGHT / 2.0 - FIT_CLEARANCE + CORNER_MARGIN
-    y_max = TABLET_HEIGHT / 2.0 + FIT_CLEARANCE - CORNER_MARGIN
+    y_min = -(TABLET_HEIGHT / 2.0 + FIT_CLEARANCE + CLIP_WALL_THICKNESS)
+    y_max = TABLET_HEIGHT / 2.0 + FIT_CLEARANCE + CLIP_WALL_THICKNESS
     y_low = -HUB_BOLT_Y
     y_high = HUB_BOLT_Y
     points = [
