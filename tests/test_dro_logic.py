@@ -6,7 +6,6 @@ from lathe_dro_pro import (
     bolt_circle_coordinates,
     boring_hole_diameter,
     coordinate_midpoint,
-    feed_rates_for,
     parse_serial_packet,
     recommend_spindle_step,
     read_serial_packets,
@@ -118,38 +117,46 @@ def test_compound_rest_angle_rejects_invalid_dimensions():
 @pytest.mark.parametrize(
     "tpi, expected",
     [
-        (4, {"tpi": 4, "stud_gear": 40, "tumbler": "A", "selector_column": 1, "longitudinal_feed_in_per_rev": 0.0853}),
-        (5.75, {"tpi": 5.75, "stud_gear": 40, "tumbler": "A", "selector_column": 5, "longitudinal_feed_in_per_rev": 0.0594}),
-        (11, {"tpi": 11, "stud_gear": 20, "tumbler": "A", "selector_column": 4, "longitudinal_feed_in_per_rev": 0.0310}),
-        (224, {"tpi": 224, "stud_gear": 20, "tumbler": "E", "selector_column": 8, "longitudinal_feed_in_per_rev": 0.0015}),
+        (4, {"tpi": 4, "stud_gear": 40, "tumbler": "A", "selector_column": 1}),
+        (6.75, {"tpi": 6.75, "stud_gear": 40, "tumbler": "A", "selector_column": 8}),
+        (15, {"tpi": 15, "stud_gear": 40, "tumbler": "B", "selector_column": 10}),
+        (40, {"tpi": 40, "stud_gear": 40, "tumbler": "D", "selector_column": 3}),
+        (224, {"tpi": 224, "stud_gear": 40, "tumbler": "F", "selector_column": 9}),
+        (480, {"tpi": 480, "stud_gear": 40, "tumbler": "G", "selector_column": 10}),
     ],
 )
 def test_thread_setting_for_chart_pitches(tpi, expected):
     assert thread_setting_for(tpi) == expected
 
 
+def test_thread_chart_has_seven_rows_and_ten_selector_positions():
+    chart = (
+        (4, 4.5, 5, 5.5, 5.75, 6, 6.5, 6.75, 7, 7.5),
+        (8, 9, 10, 11, 11.5, 12, 13, 13.5, 14, 15),
+        (16, 18, 20, 22, 23, 24, 26, 27, 28, 30),
+        (32, 36, 40, 44, 46, 48, 52, 54, 56, 60),
+        (64, 72, 80, 88, 92, 96, 104, 108, 112, 120),
+        (128, 144, 160, 176, 184, 192, 208, 216, 224, 240),
+        (256, 288, 320, 352, 368, 384, 416, 432, 448, 480),
+    )
+
+    for row_index, pitches in enumerate(chart):
+        for column, tpi in enumerate(pitches, start=1):
+            assert thread_setting_for(tpi) == {
+                "tpi": tpi,
+                "stud_gear": 40,
+                "tumbler": chr(ord("A") + row_index),
+                "selector_column": column,
+            }
+
+
 def test_thread_setting_for_returns_none_for_unlisted_pitch():
-    assert thread_setting_for(13.5) is None
+    assert thread_setting_for(13.25) is None
 
 
 def test_thread_setting_for_rejects_invalid_tpi():
     with pytest.raises(ValueError):
         thread_setting_for(0)
-
-
-def test_feed_rates_include_longitudinal_cross_and_per_minute():
-    assert feed_rates_for(11, 600) == pytest.approx({
-        "longitudinal_per_rev": 0.0310,
-        "cross_per_rev": 0.0310 / 3,
-        "longitudinal_per_min": 18.6,
-        "cross_per_min": 6.2,
-    })
-
-
-def test_feed_rates_convert_chart_values_to_metric():
-    rates = feed_rates_for(11, 600, metric=True)
-    assert rates["longitudinal_per_rev"] == pytest.approx(0.0310 * 25.4)
-    assert rates["longitudinal_per_min"] == pytest.approx(18.6 * 25.4)
 
 
 def test_spindle_rpm_for_surface_speed_uses_diameter_units():

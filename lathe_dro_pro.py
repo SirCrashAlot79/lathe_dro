@@ -13,15 +13,17 @@ PULSES_PER_INCH = 25400.0
 DEMO_MODE = False
 TOOL_OFFSETS_FILE = Path(__file__).with_name("tool_offsets.json")
 SCALE_CALIBRATION_FILE = Path(__file__).with_name("scale_calibration.json")
+BOOT_IMAGE_FILE = Path(__file__).with_name("assets") / "south_bend_badge.png"
+STUD_GEAR = 40
 THREADING_CHART = (
-    (40, "A", (4, 4.5, 5, 5.5, 5.75, 6, 6.5, 7), (0.0853, 0.0758, 0.0683, 0.0621, 0.0594, 0.0569, 0.0525, 0.0488)),
-    (20, "A", (8, 9, 10, 11, 11.5, 12, 13, 14), (0.0427, 0.0379, 0.0341, 0.0310, 0.0297, 0.0284, 0.0263, 0.0244)),
-    (20, "B", (16, 18, 20, 22, 23, 24, 26, 28), (0.0213, 0.0190, 0.0171, 0.0155, 0.0148, 0.0142, 0.0131, 0.0122)),
-    (20, "C", (32, 36, 40, 44, 46, 48, 52, 56), (0.0106, 0.0095, 0.0085, 0.0078, 0.0074, 0.0071, 0.0066, 0.0061)),
-    (20, "D", (64, 72, 80, 88, 92, 96, 104, 112), (0.0053, 0.0047, 0.0043, 0.0039, 0.0036, 0.0034, 0.0033, 0.0030)),
-    (20, "E", (128, 144, 160, 176, 184, 192, 208, 224), (0.0027, 0.0024, 0.0021, 0.0019, 0.0018, 0.0016, 0.0016, 0.0015)),
+    ("A", (4, 4.5, 5, 5.5, 5.75, 6, 6.5, 6.75, 7, 7.5)),
+    ("B", (8, 9, 10, 11, 11.5, 12, 13, 13.5, 14, 15)),
+    ("C", (16, 18, 20, 22, 23, 24, 26, 27, 28, 30)),
+    ("D", (32, 36, 40, 44, 46, 48, 52, 54, 56, 60)),
+    ("E", (64, 72, 80, 88, 92, 96, 104, 108, 112, 120)),
+    ("F", (128, 144, 160, 176, 184, 192, 208, 216, 224, 240)),
+    ("G", (256, 288, 320, 352, 368, 384, 416, 432, 448, 480)),
 )
-CROSS_FEED_RATIO = 1 / 3
 HSS_SURFACE_SPEED_SFM = {
     "Mild steel": 80,
     "Aluminum": 200,
@@ -240,7 +242,12 @@ if __name__ == "__main__":
     font_large = pygame.font.SysFont("courier", int(height * 0.13), bold=True)
     font_medium = pygame.font.SysFont("sans", int(height * 0.05), bold=True)
     font_small = pygame.font.SysFont("sans", int(height * 0.032))
-    font_logo = pygame.font.SysFont("serif", int(height * 0.13), bold=True)
+    boot_logo = pygame.image.load(BOOT_IMAGE_FILE).convert_alpha()
+    boot_logo_width = 260
+    boot_logo_height = round(boot_logo_width * boot_logo.get_height() / boot_logo.get_width())
+    boot_logo = pygame.transform.smoothscale(
+        boot_logo, (boot_logo_width, boot_logo_height)
+    )
 else:
     display_screen = None
     screen = None
@@ -381,39 +388,16 @@ def thread_setting_for(tpi):
     if not math.isfinite(requested_tpi) or requested_tpi <= 0:
         raise ValueError("TPI must be a positive number")
 
-    for stud_gear, tumbler, pitches, feeds in THREADING_CHART:
+    for tumbler, pitches in THREADING_CHART:
         for column, chart_tpi in enumerate(pitches, start=1):
             if math.isclose(requested_tpi, chart_tpi, rel_tol=0, abs_tol=1e-9):
                 return {
                     "tpi": chart_tpi,
-                    "stud_gear": stud_gear,
+                    "stud_gear": STUD_GEAR,
                     "tumbler": tumbler,
                     "selector_column": column,
-                    "longitudinal_feed_in_per_rev": feeds[column - 1],
                 }
     return None
-
-
-def feed_rates_for(tpi, rpm, metric=False):
-    setting = thread_setting_for(tpi)
-    if setting is None:
-        return None
-    try:
-        rpm = float(rpm)
-    except (TypeError, ValueError) as error:
-        raise ValueError("RPM must be a non-negative number") from error
-    if not math.isfinite(rpm) or rpm < 0:
-        raise ValueError("RPM must be a non-negative number")
-
-    unit_scale = 25.4 if metric else 1.0
-    longitudinal = setting["longitudinal_feed_in_per_rev"] * unit_scale
-    cross = longitudinal * CROSS_FEED_RATIO
-    return {
-        "longitudinal_per_rev": longitudinal,
-        "cross_per_rev": cross,
-        "longitudinal_per_min": longitudinal * rpm,
-        "cross_per_min": cross * rpm,
-    }
 
 
 def spindle_rpm_for_surface_speed(diameter, surface_speed_sfm, metric=False):
@@ -763,11 +747,9 @@ while running:
         else:
             draw_industrial_background(screen, width, height)
             center_x = width // 2
-            logo_text = font_logo.render("SOUTH BEND", True, WHITE)
-            screen.blit(logo_text, logo_text.get_rect(center=(center_x, int(height * 0.39))))
-            pygame.draw.line(screen, YELLOW, (int(width * 0.28), int(height * 0.49)), (int(width * 0.72), int(height * 0.49)), 3)
+            screen.blit(boot_logo, boot_logo.get_rect(center=(center_x, int(height * 0.34))))
             subtitle = font_medium.render("LATHE DIGITAL READOUT", True, YELLOW)
-            screen.blit(subtitle, subtitle.get_rect(center=(center_x, int(height * 0.57))))
+            screen.blit(subtitle, subtitle.get_rect(center=(center_x, int(height * 0.58))))
 
             boot_status = "DEMO STARTING" if DEMO_MODE else "CONNECTING TO PICO"
             status_text = font_small.render(boot_status, True, CYAN)
@@ -1331,7 +1313,7 @@ while running:
 
         draw_industrial_background(screen, width, height)
         screen.blit(font_medium.render("QUICK-CHANGE THREAD CHART", True, YELLOW), (50, 35))
-        screen.blit(font_small.render("DESIRED THREADS PER INCH (TPI)", True, CYAN), (50, 125))
+        screen.blit(font_small.render("DESIRED TPI (CHART RANGE: 4-480)", True, CYAN), (50, 125))
         pygame.draw.rect(screen, MED_GREY, thread_input_rect)
         pygame.draw.rect(screen, YELLOW, thread_input_rect, 3)
         tpi_text = font_medium.render(thread_input or "Enter TPI", True, WHITE)
@@ -1350,7 +1332,7 @@ while running:
         screen.blit(clear_text, clear_text.get_rect(center=clear_rect.center))
 
         if not thread_input:
-            result_lines = [("Enter a pitch shown on the gearbox chart.", WHITE)]
+            result_lines = [("Enter a TPI value shown on the gearbox chart.", WHITE)]
         else:
             try:
                 setting = thread_setting_for(thread_input)
@@ -1361,15 +1343,11 @@ while running:
                 if setting is None:
                     result_lines = [("TPI not listed on this gearbox chart.", RED)]
                 else:
-                    feed_rates = feed_rates_for(setting["tpi"], rpm, metric=is_metric)
-                    feed_unit = "mm" if is_metric else "in"
                     result_lines = [
                         (f"{setting['tpi']:g} TPI", GREEN),
                         (f"STUD GEAR: {setting['stud_gear']}", WHITE),
                         (f"LEFT-HAND TUMBLER: {setting['tumbler']}", WHITE),
-                        (f"SELECTOR COLUMN: {setting['selector_column']} (left to right)", WHITE),
-                        (f"LONG FEED: {feed_rates['longitudinal_per_rev']:.4f} {feed_unit}/rev  |  {feed_rates['longitudinal_per_min']:.1f} {feed_unit}/min", CYAN),
-                        (f"CROSS FEED (1/3): {feed_rates['cross_per_rev']:.4f} {feed_unit}/rev  |  {feed_rates['cross_per_min']:.1f} {feed_unit}/min", CYAN),
+                        (f"RIGHT-HAND SELECTOR: {setting['selector_column']}", WHITE),
                     ]
         result_y = 295
         for line, color in result_lines:

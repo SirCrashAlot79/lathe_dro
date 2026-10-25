@@ -7,6 +7,7 @@
 > values before relying on them.
 
 The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial.
+The main DRO boot screen displays `assets/south_bend_badge.png`; keep this image beside the app.
 
 ## Screenshots
 
@@ -63,7 +64,7 @@ For a windowed demo without the Pico:
 
 ## DRO Tools
 
-- `FEED` looks up exact TPI values from the confirmed quick-change gearbox chart and displays the stud gear, tumbler, selector column, longitudinal feed, and cross feed. Feed per minute is estimated from the current spindle RPM; cross feed uses the chart plate's one-third ratio.
+- `FEED` looks up the South Bend Model A chart's 70 thread pitches (4–480 TPI) and displays the 40-tooth stud gear, left-hand tumbler position (A–G), and right-hand selector position (1–10).
 - `SPEED` estimates spindle RPM from work diameter and surface speed. Editable HSS starting presets are mild steel (80 SFM), aluminum (200 SFM), stainless steel (50 SFM), and cast iron (60 SFM). These are approximate starting points; the result is advisory only and does not control the spindle. Choose a safe speed available on the machine and verify it for the actual tool, material, workholding, and setup.
 - `TAPER` calculates the compound-rest half-angle from large diameter, small diameter, and axial length.
 - `COORD` calculates a midpoint, shoulder-to-shoulder distance, or up to 24 bolt-circle coordinates relative to the pattern center. Bolt-circle start angle is measured counterclockwise from +X.
