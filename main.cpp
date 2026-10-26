@@ -9,22 +9,26 @@
 // Linear Scales (Must be sequential pairs for PIO reading)
 #define SCALE_X_PIN_A   2   // X-Axis Channel A (Pin 3 is Channel B)
 #define SCALE_Z_PIN_A   4   // Z-Axis Channel A (Pin 5 is Channel B)
+#define SCALE_Y_PIN_A   6   // Y-Axis Channel A (Pin 7 is Channel B)
 
 // Spindle tach input for LJ12A3-4-Z/BX NPN NO sensor. Power sensor from 6-36 V;
-// GP6 may use its 3.3 V pull-up only if the sensor output is verified open-collector.
-#define TACH_PIN        6
+// GP8 may use its 3.3 V pull-up only if the sensor output is verified open-collector.
+#define TACH_PIN        8
 static constexpr uint32_t TACH_PULSES_PER_REV = 4;
 static constexpr uint32_t TACH_TIMEOUT_US = 1500000;
 
 static volatile int32_t x_pulse_count = 0;
+static volatile int32_t y_pulse_count = 0;
 static volatile int32_t z_pulse_count = 0;
 static volatile uint32_t last_tach_pulse_time = 0;
 static volatile uint32_t pulse_delta = 0;
 static volatile bool tach_pulse_initialized = false;
 
 static uint8_t last_x_state = 0;
+static uint8_t last_y_state = 0;
 static uint8_t last_z_state = 0;
 static bool x_state_initialized = false;
+static bool y_state_initialized = false;
 static bool z_state_initialized = false;
 
 static const int8_t quadrature_delta[16] = {
@@ -53,6 +57,7 @@ static void process_axis_samples(PIO pio, uint sm, volatile int32_t *count,
 static void pio_irq_handler() {
     process_axis_samples(pio0, 0, &x_pulse_count, &last_x_state, &x_state_initialized);
     process_axis_samples(pio0, 1, &z_pulse_count, &last_z_state, &z_state_initialized);
+    process_axis_samples(pio0, 2, &y_pulse_count, &last_y_state, &y_state_initialized);
 }
 
 // Capture one falling edge per tach target. The first edge establishes a baseline.
@@ -81,20 +86,24 @@ int main() {
     gpio_pull_up(TACH_PIN); // 3.3 V pull-up for verified NPN sinking/open-collector output.
     gpio_set_irq_enabled_with_callback(TACH_PIN, GPIO_IRQ_EDGE_FALL, true, &tach_interrupt_handler);
 
-    // 2. Initialize the two PIO state machines and their shared RX-FIFO IRQ.
+    // 2. Initialize the three PIO state machines and their shared RX-FIFO IRQ.
     PIO pio = pio0;
     uint offset = pio_add_program(pio, &quadrature_program);
     const uint sm_x = 0;
     const uint sm_z = 1;
+    const uint sm_y = 2;
     pio_sm_claim(pio, sm_x);
     pio_sm_claim(pio, sm_z);
+    pio_sm_claim(pio, sm_y);
     irq_set_exclusive_handler(PIO0_IRQ_0, pio_irq_handler);
     pio_set_irq0_source_enabled(pio, pis_sm0_rx_fifo_not_empty, true);
     pio_set_irq0_source_enabled(pio, pis_sm1_rx_fifo_not_empty, true);
+    pio_set_irq0_source_enabled(pio, pis_sm2_rx_fifo_not_empty, true);
     irq_set_enabled(PIO0_IRQ_0, true);
 
     quadrature_program_init(pio, sm_x, offset, SCALE_X_PIN_A);
     quadrature_program_init(pio, sm_z, offset, SCALE_Z_PIN_A);
+    quadrature_program_init(pio, sm_y, offset, SCALE_Y_PIN_A);
 
     uint32_t last_serial_tx = 0;
     uint32_t current_rpm = 0;
@@ -115,7 +124,8 @@ int main() {
         // 4. Stream Packet to Ubuntu Laptop at 60Hz Interval (Every 16ms)
         if (now - last_serial_tx >= 16) {
             // Transmit matching format expected by lathe_dro_pro.py
-            printf("X:%d,Z:%d,RPM:%u\n", x_pulse_count, z_pulse_count, current_rpm);
+            printf("X:%d,Y:%d,Z:%d,RPM:%u\n",
+                   x_pulse_count, y_pulse_count, z_pulse_count, current_rpm);
             last_serial_tx = now;
         }
 
@@ -132,6 +142,8 @@ int main() {
                     x_pulse_count = 0;
                 } else if (strcmp(serial_buffer, "ZERO_Z") == 0) {
                     z_pulse_count = 0;
+                } else if (strcmp(serial_buffer, "ZERO_Y") == 0) {
+                    y_pulse_count = 0;
                 }
                 buffer_index = 0; // Clear string tracking
             } else if (buffer_index < 31) {

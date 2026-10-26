@@ -13,6 +13,7 @@ PULSES_PER_INCH = 25400.0
 DEMO_MODE = False
 TOOL_OFFSETS_FILE = Path(__file__).with_name("tool_offsets.json")
 SCALE_CALIBRATION_FILE = Path(__file__).with_name("scale_calibration.json")
+MILL_SCALE_CALIBRATION_FILE = Path(__file__).with_name("mill_scale_calibration.json")
 BOOT_IMAGE_FILE = Path(__file__).with_name("assets") / "south_bend_badge.png"
 STUD_GEAR = 40
 THREADING_CHART = (
@@ -39,9 +40,9 @@ SPINDLE_SPEED_STEPS = {
 
 
 def parse_serial_packet(line):
-    """Parse one firmware packet in X:<count>,Z:<count>,RPM:<rpm> format."""
+    """Parse one firmware packet containing X/Y/Z counts and spindle RPM."""
     if not line.strip():
-        return 0, 0, 0
+        return 0, 0, 0, 0
 
     values = {}
     for field in line.strip().split(","):
@@ -49,7 +50,12 @@ def parse_serial_packet(line):
         values[key.strip().upper()] = int(value.strip())
 
     try:
-        return values["X"], values["Z"], values["RPM"]
+        return (
+            values["X"],
+            values.get("Y", 0),
+            values["Z"],
+            values["RPM"],
+        )
     except KeyError as error:
         raise ValueError(f"Missing {error.args[0]} field in serial packet") from error
 
@@ -134,7 +140,7 @@ def scale_compensation_for_travel(known_distance, count_delta,
 
 
 def load_scale_calibration(path=SCALE_CALIBRATION_FILE):
-    factors = {"x": 1.0, "z": 1.0}
+    factors = {"x": 1.0, "y": 1.0, "z": 1.0}
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -153,25 +159,62 @@ def load_scale_calibration(path=SCALE_CALIBRATION_FILE):
 
 
 def save_scale_calibration(path, factors):
-    data = {axis: float(factors[axis]) for axis in ("x", "z")}
+    data = {axis: float(factors[axis]) for axis in ("x", "y", "z")}
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def set_scale_compensation(axis, factor, path=SCALE_CALIBRATION_FILE):
     """Persist a valid per-axis correction and update the live display factor."""
-    global x_linear_error_comp, z_linear_error_comp, scale_calibration_factors
+    global x_linear_error_comp, y_linear_error_comp, z_linear_error_comp
+    global scale_calibration_factors
 
     axis = axis.upper()
-    if axis not in ("X", "Z") or not math.isfinite(factor) or factor <= 0:
-        raise ValueError("axis must be X or Z and compensation must be positive")
+    if axis not in ("X", "Y", "Z") or not math.isfinite(factor) or factor <= 0:
+        raise ValueError("axis must be X, Y, or Z and compensation must be positive")
     updated_factors = dict(scale_calibration_factors)
     updated_factors[axis.lower()] = float(factor)
     save_scale_calibration(path, updated_factors)
     scale_calibration_factors = updated_factors
     if axis == "X":
         x_linear_error_comp = updated_factors["x"]
+    elif axis == "Y":
+        y_linear_error_comp = updated_factors["y"]
     else:
         z_linear_error_comp = updated_factors["z"]
+
+
+def set_mill_scale_compensation(axis, factor, path=MILL_SCALE_CALIBRATION_FILE):
+    """Persist independent per-axis mill calibration."""
+    global mill_scale_calibration_factors
+
+    axis = axis.lower()
+    if axis not in ("x", "y", "z") or not math.isfinite(factor) or factor <= 0:
+        raise ValueError("axis must be X, Y, or Z and compensation must be positive")
+    updated_factors = dict(mill_scale_calibration_factors)
+    updated_factors[axis] = float(factor)
+    save_scale_calibration(path, updated_factors)
+    mill_scale_calibration_factors = updated_factors
+
+
+def mill_preset_origin(count, preset_value, compensation, metric=False,
+                       direction=1, pulses_per_inch=PULSES_PER_INCH):
+    """Return the raw count origin that produces a requested mill coordinate."""
+    if direction not in (-1, 1):
+        raise ValueError("axis direction must be 1 or -1")
+    values = (count, preset_value, compensation, pulses_per_inch)
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("preset and calibration values must be finite")
+    if compensation <= 0 or pulses_per_inch <= 0:
+        raise ValueError("calibration factor and counts per inch must be positive")
+
+    distance_inches = preset_value / 25.4 if metric else preset_value
+    preset_counts = round(distance_inches * pulses_per_inch / compensation)
+    return int(count) - direction * preset_counts
+
+
+def mill_half_origin(count, origin):
+    """Shift a mill axis origin so the current coordinate reads half its value."""
+    return int(count) - round((int(count) - int(origin)) / 2)
 
 
 def tool_x_offset_to_counts(offset, metric=False, diameter_mode=False,
@@ -215,7 +258,7 @@ def tool_position_with_manual_x_offset(tool_id, offset_counts, positions):
     return master_position[0] + int(offset_counts), z_count
 
 if __name__ == "__main__":
-    argument_parser = argparse.ArgumentParser(description="Lathe digital readout")
+    argument_parser = argparse.ArgumentParser(description="Lathe and mill digital readout")
     argument_parser.add_argument("--port", help="Pico USB serial port, for example /dev/ttyACM0")
     argument_parser.add_argument("--baud", type=int, default=115200)
     argument_parser.add_argument("--demo", action="store_true", help="Use simulated readings")
@@ -230,7 +273,7 @@ if __name__ == "__main__":
         display_screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     else:
         display_screen = pygame.display.set_mode((1280, 720))
-    pygame.display.set_caption("South Bend 10k Pro Toolroom DRO")
+    pygame.display.set_caption("South Bend Lathe / Grizzly G0704 Mill DRO")
     width, height = 1280, 720
     screen = pygame.Surface((width, height))
     display_width, display_height = display_screen.get_size()
@@ -242,6 +285,7 @@ if __name__ == "__main__":
     font_large = pygame.font.SysFont("courier", int(height * 0.13), bold=True)
     font_medium = pygame.font.SysFont("sans", int(height * 0.05), bold=True)
     font_small = pygame.font.SysFont("sans", int(height * 0.032))
+    font_button = pygame.font.SysFont("sans", int(height * 0.027))
     boot_logo = pygame.image.load(BOOT_IMAGE_FILE).convert_alpha()
     boot_logo_width = 260
     boot_logo_height = round(boot_logo_width * boot_logo.get_height() / boot_logo.get_width())
@@ -326,13 +370,19 @@ STATE_SPEED = 6
 STATE_COORD = 7
 STATE_BORING = 8
 STATE_POWER_CONFIRM = 9
+STATE_MACHINE_SELECT = 10
+STATE_MILL_DRO = 11
+STATE_MILL_PRESET = 12
 BOOT_DURATION_MS = 2500
 current_state = STATE_BOOT
+setup_return_state = STATE_MAIN_DRO
 
 # --- SYSTEM & CALIBRATION CALCULATION REGISTERS ---
-x_pulses, z_pulses, rpm = 0, 0, 0
-x_abs_zero, z_abs_zero = 0, 0
-x_inc_zero, z_inc_zero = 0, 0
+x_pulses, y_pulses, z_pulses, rpm = 0, 0, 0, 0
+x_abs_zero, y_abs_zero, z_abs_zero = 0, 0, 0
+x_inc_zero, y_inc_zero, z_inc_zero = 0, 0, 0
+mill_abs_zero = {"X": 0, "Y": 0, "Z": 0}
+mill_inc_zero = {"X": 0, "Y": 0, "Z": 0}
 tool_touch_positions = load_tool_touch_positions()
 manual_tool_x_offset_text = ""
 manual_tool_x_offset_tool_id = None
@@ -340,6 +390,7 @@ manual_tool_x_offset_sign = 1
 is_diameter_mode = True
 is_metric = False
 is_abs_mode = True
+mill_is_abs_mode = True
 current_tool_id = 1
 operation_mode = "TURNING"
 boring_initial_diameter = ""
@@ -354,10 +405,24 @@ boring_status = ""
 resolution_tier = 0.0005     # Toggles: 0.0001, 0.0005, 0.0010
 scale_calibration_factors = load_scale_calibration()
 x_linear_error_comp = scale_calibration_factors["x"]
+y_linear_error_comp = scale_calibration_factors["y"]
 z_linear_error_comp = scale_calibration_factors["z"]
-scale_calibration_distances = {"X": "", "Z": ""}
-active_scale_calibration_axis = "X"
-scale_calibration_start_counts = {"X": None, "Z": None}
+mill_scale_calibration_factors = load_scale_calibration(MILL_SCALE_CALIBRATION_FILE)
+mill_is_metric = False
+mill_axis_direction = {"X": 1, "Y": 1, "Z": 1}
+mill_preset_axis = "X"
+mill_preset_text = ""
+mill_preset_negative = False
+mill_preset_status = ""
+coord_return_state = STATE_MAIN_DRO
+scale_calibration_state = {
+    profile: {
+        "distances": {"X": "", "Y": "", "Z": ""},
+        "start_counts": {"X": None, "Y": None, "Z": None},
+        "active_axis": "X",
+    }
+    for profile in ("lathe", "mill")
+}
 scale_calibration_status = ""
 backlash_x = 0.0000          # For mechanical backlash storage
 
@@ -520,6 +585,7 @@ main_buttons = {
     "DIA": pygame.Rect(header_button_start, header_button_y, header_button_width, header_button_height),
     "INCH/MM": pygame.Rect(header_button_start + header_button_width + header_button_gap, header_button_y, header_button_width, header_button_height),
     "POWER": pygame.Rect(header_button_start + 2 * (header_button_width + header_button_gap), header_button_y, header_button_width, header_button_height),
+    "MACHINES": pygame.Rect(40 + 2 * (operation_button_width + operation_button_gap), 20, operation_button_width, header_button_height),
     "ZERO_X":  pygame.Rect(col1_x, int(height*0.16), btn_w, btn_h),
     "ABS/INC": pygame.Rect(col2_x, int(height*0.16), btn_w, btn_h),
     "ZERO_Z":  pygame.Rect(col1_x, int(height*0.30), btn_w, btn_h),
@@ -530,6 +596,42 @@ main_buttons = {
     "SPEED":   pygame.Rect(col2_x, int(height*0.58), btn_w, btn_h),
     "COORD":   pygame.Rect(col1_x, int(height*0.72), btn_w, btn_h),
     "SETUP":   pygame.Rect(col2_x, int(height*0.72), btn_w, btn_h)
+}
+machine_select_buttons = {
+    "LATHE": pygame.Rect(105, 230, 470, 340),
+    "MILL": pygame.Rect(705, 230, 470, 340),
+}
+mill_header_buttons = {
+    "INCH/MM": pygame.Rect(45, 28, 230, 70),
+    "ABS/INC": pygame.Rect(295, 28, 230, 70),
+    "SETUP": pygame.Rect(545, 28, 230, 70),
+    "COORD": pygame.Rect(795, 28, 180, 70),
+    "MACHINES": pygame.Rect(width - 285, 28, 240, 70),
+}
+mill_axis_rows = {
+    axis: pygame.Rect(35, 120 + index * 180, 900, 165)
+    for index, axis in enumerate(("X", "Y", "Z"))
+}
+mill_zero_buttons = {
+    axis: pygame.Rect(645, 120 + index * 180 + 50, 65, 60)
+    for index, axis in enumerate(("X", "Y", "Z"))
+}
+mill_half_buttons = {
+    axis: pygame.Rect(715, 120 + index * 180 + 50, 65, 60)
+    for index, axis in enumerate(("X", "Y", "Z"))
+}
+mill_preset_buttons = {
+    axis: pygame.Rect(785, 120 + index * 180 + 50, 65, 60)
+    for index, axis in enumerate(("X", "Y", "Z"))
+}
+mill_direction_buttons = {
+    axis: pygame.Rect(855, 120 + index * 180 + 50, 65, 60)
+    for index, axis in enumerate(("X", "Y", "Z"))
+}
+mill_preset_buttons_panel = {
+    "SIGN": pygame.Rect(50, 300, 180, 60),
+    "SET": pygame.Rect(50, 385, 280, 70),
+    "CANCEL": pygame.Rect(350, 385, 280, 70),
 }
 
 boring_input_rect = pygame.Rect(50, 165, 500, 70)
@@ -553,16 +655,21 @@ boring_tool_button = pygame.Rect(boring_readout_rects["RPM"].x, 84, boring_reado
 
 setup_buttons = {
     "RES_TOGGLE": pygame.Rect(50, 90, 300, 60),
-    "CAL_X_DISTANCE": pygame.Rect(50, 190, 190, 60),
-    "CAL_X_START": pygame.Rect(255, 190, 180, 60),
-    "CAL_X_APPLY": pygame.Rect(450, 190, 200, 60),
-    "COMP_X_UP":  pygame.Rect(50, 300, 140, 50),
-    "COMP_X_DN":  pygame.Rect(210, 300, 140, 50),
-    "CAL_Z_DISTANCE": pygame.Rect(50, 410, 190, 60),
-    "CAL_Z_START": pygame.Rect(255, 410, 180, 60),
-    "CAL_Z_APPLY": pygame.Rect(450, 410, 200, 60),
-    "COMP_Z_UP":  pygame.Rect(50, 520, 140, 50),
-    "COMP_Z_DN":  pygame.Rect(210, 520, 140, 50),
+    "CAL_X_DISTANCE": pygame.Rect(50, 180, 140, 48),
+    "CAL_X_START": pygame.Rect(205, 180, 160, 48),
+    "CAL_X_APPLY": pygame.Rect(375, 180, 180, 48),
+    "COMP_X_UP": pygame.Rect(570, 230, 60, 36),
+    "COMP_X_DN": pygame.Rect(635, 230, 60, 36),
+    "CAL_Y_DISTANCE": pygame.Rect(50, 315, 140, 48),
+    "CAL_Y_START": pygame.Rect(205, 315, 160, 48),
+    "CAL_Y_APPLY": pygame.Rect(375, 315, 180, 48),
+    "COMP_Y_UP": pygame.Rect(570, 365, 60, 36),
+    "COMP_Y_DN": pygame.Rect(635, 365, 60, 36),
+    "CAL_Z_DISTANCE": pygame.Rect(50, 450, 140, 48),
+    "CAL_Z_START": pygame.Rect(205, 450, 160, 48),
+    "CAL_Z_APPLY": pygame.Rect(375, 450, 180, 48),
+    "COMP_Z_UP": pygame.Rect(570, 500, 60, 36),
+    "COMP_Z_DN": pygame.Rect(635, 500, 60, 36),
     "BACK_MAIN":  pygame.Rect(width - 350, height - 120, 300, 80)
 }
 
@@ -727,13 +834,14 @@ while running:
     if DEMO_MODE:
         if frame_counter % 2 == 0:
             x_pulses += int(10 * math.sin(frame_counter / 60.0))
+            y_pulses += int(20 * math.sin(frame_counter / 90.0))
             z_pulses += int(35 * math.cos(frame_counter / 120.0))
         rpm = int(720 + (12 * math.sin(frame_counter / 15.0)))
     elif serial_connection is not None:
         try:
             serial_buffer, packet = read_serial_packets(serial_connection, serial_buffer)
             if packet is not None:
-                x_pulses, z_pulses, rpm = packet
+                x_pulses, y_pulses, z_pulses, rpm = packet
         except serial.SerialException:
             connection_status = "Serial connection lost"
             serial_connection.close()
@@ -743,12 +851,12 @@ while running:
     if current_state == STATE_BOOT:
         elapsed_ms = pygame.time.get_ticks() - boot_started_ms
         if elapsed_ms >= BOOT_DURATION_MS:
-            current_state = STATE_MAIN_DRO
+            current_state = STATE_MACHINE_SELECT
         else:
             draw_industrial_background(screen, width, height)
             center_x = width // 2
             screen.blit(boot_logo, boot_logo.get_rect(center=(center_x, int(height * 0.34))))
-            subtitle = font_medium.render("LATHE DIGITAL READOUT", True, YELLOW)
+            subtitle = font_medium.render("MACHINE DIGITAL READOUT", True, YELLOW)
             screen.blit(subtitle, subtitle.get_rect(center=(center_x, int(height * 0.58))))
 
             boot_status = "DEMO STARTING" if DEMO_MODE else "CONNECTING TO PICO"
@@ -762,6 +870,31 @@ while running:
             pygame.draw.rect(screen, GREY, (bar_x, bar_y, bar_width, bar_height), border_radius=2)
             fill_width = int(bar_width * elapsed_ms / BOOT_DURATION_MS)
             pygame.draw.rect(screen, CYAN, (bar_x, bar_y, fill_width, bar_height), border_radius=2)
+    elif current_state == STATE_MACHINE_SELECT:
+        if clicked:
+            if machine_select_buttons["LATHE"].collidepoint(pos):
+                current_state = STATE_MAIN_DRO
+            elif machine_select_buttons["MILL"].collidepoint(pos):
+                current_state = STATE_MILL_DRO
+
+        draw_industrial_background(screen, width, height)
+        title = font_medium.render("SELECT MACHINE", True, YELLOW)
+        screen.blit(title, title.get_rect(center=(width // 2, 125)))
+        lathe_rect = machine_select_buttons["LATHE"]
+        pygame.draw.rect(screen, MED_GREY, lathe_rect)
+        pygame.draw.rect(screen, YELLOW, lathe_rect, 3)
+        screen.blit(boot_logo, boot_logo.get_rect(center=(lathe_rect.centerx, lathe_rect.centery - 35)))
+        lathe_label = font_small.render("SOUTH BEND LATHE DRO", True, WHITE)
+        screen.blit(lathe_label, lathe_label.get_rect(center=(lathe_rect.centerx, lathe_rect.bottom - 42)))
+
+        mill_rect = machine_select_buttons["MILL"]
+        pygame.draw.rect(screen, MED_GREY, mill_rect)
+        pygame.draw.rect(screen, CYAN, mill_rect, 3)
+        mill_label = font_medium.render("Grizzly G0704 Mill", True, WHITE)
+        screen.blit(mill_label, mill_label.get_rect(center=mill_rect.center))
+
+        hint = font_small.render("Select a machine to open its readout", True, LIGHT_GREY)
+        screen.blit(hint, hint.get_rect(center=(width // 2, height - 60)))
     elif current_state == STATE_POWER_CONFIRM:
         if clicked:
             if power_confirm_buttons["CONFIRM"].collidepoint(pos):
@@ -788,9 +921,12 @@ while running:
     elif current_state == STATE_MAIN_DRO:
         # --- MAIN READOUT DISPLAY SCREEN LOGIC ---
         if clicked:
-            if main_buttons["POWER"].collidepoint(pos):
+            if main_buttons["MACHINES"].collidepoint(pos):
+                current_state = STATE_MACHINE_SELECT
+            elif main_buttons["POWER"].collidepoint(pos):
                 current_state = STATE_POWER_CONFIRM
             elif main_buttons["SETUP"].collidepoint(pos):
+                setup_return_state = STATE_MAIN_DRO
                 current_state = STATE_SETUP_MENU  # SWAP THE SCREEN STATE HERE
             elif main_buttons["TURNING"].collidepoint(pos):
                 operation_mode = "TURNING"
@@ -806,6 +942,7 @@ while running:
             elif main_buttons["SPEED"].collidepoint(pos):
                 current_state = STATE_SPEED
             elif main_buttons["COORD"].collidepoint(pos):
+                coord_return_state = STATE_MAIN_DRO
                 current_state = STATE_COORD
             elif main_buttons["DIA"].collidepoint(pos):
                 is_diameter_mode = not is_diameter_mode
@@ -873,7 +1010,7 @@ while running:
             elif btn_name == "DIA": b_color, t_color = YELLOW, BLACK
             elif btn_name == "INCH/MM": b_color, t_color = MAGENTA, BLACK
             elif btn_name == "ABS/INC": b_color, t_color = CYAN, BLACK
-            elif btn_name in ("SETUP", "TOOL_SETUP", "POWER"): b_color, t_color = RED, WHITE
+            elif btn_name in ("SETUP", "TOOL_SETUP", "POWER", "MACHINES"): b_color, t_color = RED, WHITE
             
             pygame.draw.rect(screen, b_color, rect)
             pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
@@ -887,10 +1024,183 @@ while running:
                 label_text = "ABS" if is_abs_mode else "INC"
             elif btn_name == "TOOL_SETUP":
                 label_text = "TOOL SET"
+            elif btn_name == "MACHINES":
+                label_text = "MACHINES"
             else:
                 label_text = f"T-{current_tool_id}" if btn_name == "TOOL_LIB" else btn_name
             lbl = font_small.render(label_text, True, t_color)
             screen.blit(lbl, lbl.get_rect(center=rect.center))
+
+    elif current_state == STATE_MILL_DRO:
+        if clicked:
+            if mill_header_buttons["MACHINES"].collidepoint(pos):
+                current_state = STATE_MACHINE_SELECT
+            elif mill_header_buttons["INCH/MM"].collidepoint(pos):
+                mill_is_metric = not mill_is_metric
+            elif mill_header_buttons["ABS/INC"].collidepoint(pos):
+                mill_is_abs_mode = not mill_is_abs_mode
+                if not mill_is_abs_mode:
+                    mill_inc_zero.update({"X": x_pulses, "Y": y_pulses, "Z": z_pulses})
+            elif mill_header_buttons["SETUP"].collidepoint(pos):
+                setup_return_state = STATE_MILL_DRO
+                current_state = STATE_SETUP_MENU
+            elif mill_header_buttons["COORD"].collidepoint(pos):
+                coord_return_state = STATE_MILL_DRO
+                current_state = STATE_COORD
+            else:
+                current_counts = {"X": x_pulses, "Y": y_pulses, "Z": z_pulses}
+                origins = mill_abs_zero if mill_is_abs_mode else mill_inc_zero
+                for axis in ("X", "Y", "Z"):
+                    if mill_zero_buttons[axis].collidepoint(pos):
+                        origins[axis] = current_counts[axis]
+                        break
+                    if mill_half_buttons[axis].collidepoint(pos):
+                        origins[axis] = mill_half_origin(current_counts[axis], origins[axis])
+                        break
+                    if mill_preset_buttons[axis].collidepoint(pos):
+                        mill_preset_axis = axis
+                        mill_preset_text = ""
+                        mill_preset_negative = False
+                        mill_preset_status = ""
+                        current_state = STATE_MILL_PRESET
+                        break
+                    if mill_direction_buttons[axis].collidepoint(pos):
+                        mill_axis_direction[axis] *= -1
+                        break
+
+        axis_counts = {
+            "X": (x_pulses, mill_abs_zero["X"] if mill_is_abs_mode else mill_inc_zero["X"], mill_scale_calibration_factors["x"]),
+            "Y": (y_pulses, mill_abs_zero["Y"] if mill_is_abs_mode else mill_inc_zero["Y"], mill_scale_calibration_factors["y"]),
+            "Z": (z_pulses, mill_abs_zero["Z"] if mill_is_abs_mode else mill_inc_zero["Z"], mill_scale_calibration_factors["z"]),
+        }
+        unit = "mm" if mill_is_metric else "in"
+        fmt = ".3f" if mill_is_metric else ".4f"
+        draw_industrial_background(screen, width, height)
+
+        for key, rect in mill_header_buttons.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, LIGHT_GREY, rect, 2)
+            if key == "INCH/MM":
+                label = "MM" if mill_is_metric else "INCH"
+            elif key == "ABS/INC":
+                label = "ABS" if mill_is_abs_mode else "INC"
+            elif key == "SETUP":
+                label = "SETUP"
+            elif key == "COORD":
+                label = "COORD"
+            else:
+                label = "MACHINES"
+            text = font_small.render(label, True, WHITE)
+            screen.blit(text, text.get_rect(center=rect.center))
+
+        for axis, row in mill_axis_rows.items():
+            count, origin, compensation = axis_counts[axis]
+            value = (
+                (count - origin) / PULSES_PER_INCH
+                * compensation * mill_axis_direction[axis]
+            )
+            if mill_is_metric:
+                value *= 25.4
+            display_value = round_to_precision(value, mill_is_metric, resolution_tier)
+            pygame.draw.rect(screen, GREY, row)
+            pygame.draw.rect(screen, LIGHT_GREY, row, 2)
+            label = font_medium.render(axis, True, CYAN)
+            screen.blit(label, (row.x + 25, row.y + 48))
+            readout = font_large.render(f"{display_value:{fmt}}", True, WHITE)
+            screen.blit(readout, (row.x + 145, row.y + 30))
+            unit_text = font_small.render(unit, True, LIGHT_GREY)
+            screen.blit(unit_text, (row.x + 595, row.y + 75))
+            for button_rect, label in (
+                (mill_zero_buttons[axis], "ZERO"),
+                (mill_half_buttons[axis], "HALF"),
+                (mill_preset_buttons[axis], "SET"),
+                (mill_direction_buttons[axis], "REV" if mill_axis_direction[axis] < 0 else "DIR"),
+            ):
+                pygame.draw.rect(screen, MED_GREY, button_rect)
+                pygame.draw.rect(screen, YELLOW if label != "DIR" else LIGHT_GREY, button_rect, 2)
+                button_text = font_button.render(label, True, WHITE)
+                screen.blit(button_text, button_text.get_rect(center=button_rect.center))
+
+        status_color = GREEN if DEMO_MODE or serial_connection is not None else RED
+        screen.blit(font_small.render(connection_status, True, status_color), (40, height - 42))
+
+    elif current_state == STATE_MILL_PRESET:
+        if clicked:
+            if mill_preset_buttons_panel["CANCEL"].collidepoint(pos):
+                current_state = STATE_MILL_DRO
+            elif mill_preset_buttons_panel["SIGN"].collidepoint(pos):
+                mill_preset_negative = not mill_preset_negative
+            elif mill_preset_buttons_panel["SET"].collidepoint(pos):
+                try:
+                    preset_value = float(mill_preset_text or "0")
+                    if mill_preset_negative:
+                        preset_value *= -1
+                    current_count = {
+                        "X": x_pulses, "Y": y_pulses, "Z": z_pulses
+                    }[mill_preset_axis]
+                    compensation = mill_scale_calibration_factors[mill_preset_axis.lower()]
+                    origins = mill_abs_zero if mill_is_abs_mode else mill_inc_zero
+                    origins[mill_preset_axis] = mill_preset_origin(
+                        current_count,
+                        preset_value,
+                        compensation,
+                        metric=mill_is_metric,
+                        direction=mill_axis_direction[mill_preset_axis],
+                    )
+                    mill_preset_status = ""
+                    current_state = STATE_MILL_DRO
+                except ValueError as error:
+                    mill_preset_status = str(error)
+            elif taper_buttons["CLEAR"].collidepoint(pos):
+                mill_preset_text = ""
+            else:
+                for key, rect in keypad_buttons.items():
+                    if rect.collidepoint(pos):
+                        if key == "DEL":
+                            mill_preset_text = mill_preset_text[:-1]
+                        elif key == ".":
+                            if "." not in mill_preset_text:
+                                mill_preset_text += "."
+                        elif len(mill_preset_text) < 12:
+                            mill_preset_text += key
+                        mill_preset_status = ""
+                        break
+
+        draw_industrial_background(screen, width, height)
+        screen.blit(
+            font_medium.render(f"SET {mill_preset_axis} COORDINATE", True, YELLOW),
+            (50, 45),
+        )
+        screen.blit(
+            font_small.render("ENTER PRESET POSITION", True, CYAN),
+            (50, 150),
+        )
+        preset_rect = pygame.Rect(50, 185, 500, 75)
+        pygame.draw.rect(screen, MED_GREY, preset_rect)
+        pygame.draw.rect(screen, YELLOW, preset_rect, 3)
+        sign = "-" if mill_preset_negative else ""
+        unit = "mm" if mill_is_metric else "in"
+        value_text = font_medium.render(
+            f"{sign}{mill_preset_text or '0'} {unit}", True, WHITE
+        )
+        screen.blit(value_text, value_text.get_rect(midleft=(preset_rect.x + 20, preset_rect.centery)))
+        for key, rect in keypad_buttons.items():
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, WHITE, rect, 2)
+            key_text = font_medium.render(key, True, WHITE)
+            screen.blit(key_text, key_text.get_rect(center=rect.center))
+        for key, label, color in (
+            ("SIGN", "+ / -", CYAN),
+            ("SET", "SET COORDINATE", GREEN),
+            ("CANCEL", "CANCEL", RED),
+        ):
+            rect = mill_preset_buttons_panel[key]
+            pygame.draw.rect(screen, MED_GREY, rect)
+            pygame.draw.rect(screen, color, rect, 2)
+            button_text = font_button.render(label, True, WHITE)
+            screen.blit(button_text, button_text.get_rect(center=rect.center))
+        if mill_preset_status:
+            draw_wrapped_text(screen, mill_preset_status, font_small, RED, (50, 490), 600)
 
     elif current_state == STATE_BORING:
         if clicked:
@@ -1061,7 +1371,7 @@ while running:
     elif current_state == STATE_COORD:
         if clicked:
             if coord_buttons["BACK"].collidepoint(pos):
-                current_state = STATE_MAIN_DRO
+                current_state = coord_return_state
             else:
                 for mode_name, rect in coord_mode_buttons.items():
                     if rect.collidepoint(pos):
@@ -1099,7 +1409,10 @@ while running:
             text = font_small.render(mode_name, True, BLACK if selected else WHITE)
             screen.blit(text, text.get_rect(center=rect.center))
 
-        unit = "mm" if is_metric else "in"
+        coord_is_metric = (
+            mill_is_metric if coord_return_state == STATE_MILL_DRO else is_metric
+        )
+        unit = "mm" if coord_is_metric else "in"
         result_lines = []
         bolt_points = []
         if coord_mode == "BOLT CIRCLE":
@@ -1439,112 +1752,111 @@ while running:
 
     elif current_state == STATE_SETUP_MENU:
         # --- PARAMETER CONFIGURATION AND SCALE CALIBRATION ---
+        calibration_axes = (
+            ("X", "Y", "Z")
+            if setup_return_state == STATE_MILL_DRO
+            else ("X", "Z")
+        )
+        calibration_profile = (
+            "mill" if setup_return_state == STATE_MILL_DRO else "lathe"
+        )
+        calibration_state = scale_calibration_state[calibration_profile]
+        calibration_distances = calibration_state["distances"]
+        calibration_start_counts = calibration_state["start_counts"]
+        calibration_y_positions = {"X": 150, "Y": 285, "Z": 420}
+        calibration_metric_mode = (
+            mill_is_metric if setup_return_state == STATE_MILL_DRO else is_metric
+        )
+        calibration_factors = (
+            mill_scale_calibration_factors
+            if setup_return_state == STATE_MILL_DRO
+            else scale_calibration_factors
+        )
         if clicked:
             if setup_buttons["BACK_MAIN"].collidepoint(pos):
-                current_state = STATE_MAIN_DRO
+                current_state = setup_return_state
             elif setup_buttons["RES_TOGGLE"].collidepoint(pos):
                 # Cycle display step tiers smoothly
                 if resolution_tier == 0.0005: resolution_tier = 0.0001
                 elif resolution_tier == 0.0001: resolution_tier = 0.0010
                 else: resolution_tier = 0.0005
-            elif setup_buttons["CAL_X_DISTANCE"].collidepoint(pos):
-                active_scale_calibration_axis = "X"
-            elif setup_buttons["CAL_Z_DISTANCE"].collidepoint(pos):
-                active_scale_calibration_axis = "Z"
-            elif setup_buttons["CAL_X_START"].collidepoint(pos):
-                if DEMO_MODE or serial_connection is None:
-                    scale_calibration_status = "Live Pico connection required for calibration"
-                else:
-                    scale_calibration_start_counts["X"] = x_pulses
-                    active_scale_calibration_axis = "X"
-                    scale_calibration_status = "X start captured; move X by the entered distance"
-            elif setup_buttons["CAL_Z_START"].collidepoint(pos):
-                if DEMO_MODE or serial_connection is None:
-                    scale_calibration_status = "Live Pico connection required for calibration"
-                else:
-                    scale_calibration_start_counts["Z"] = z_pulses
-                    active_scale_calibration_axis = "Z"
-                    scale_calibration_status = "Z start captured; move Z by the entered distance"
-            elif setup_buttons["CAL_X_APPLY"].collidepoint(pos):
-                start_count = scale_calibration_start_counts["X"]
-                distance_text = scale_calibration_distances["X"]
-                if DEMO_MODE or serial_connection is None:
-                    scale_calibration_status = "Live Pico connection required for calibration"
-                elif start_count is None:
-                    scale_calibration_status = "Capture X start before calibrating"
-                elif not distance_text:
-                    scale_calibration_status = "Enter the known X travel first"
-                else:
-                    try:
-                        factor = scale_compensation_for_travel(
-                            float(distance_text), x_pulses - start_count, metric=is_metric
-                        )
-                        set_scale_compensation("X", factor)
-                        scale_calibration_start_counts["X"] = None
-                        scale_calibration_status = f"X factor saved: {factor:.6f}"
-                    except ValueError as error:
-                        scale_calibration_status = str(error)
-                    except OSError:
-                        scale_calibration_status = "Could not save scale calibration"
-            elif setup_buttons["CAL_Z_APPLY"].collidepoint(pos):
-                start_count = scale_calibration_start_counts["Z"]
-                distance_text = scale_calibration_distances["Z"]
-                if DEMO_MODE or serial_connection is None:
-                    scale_calibration_status = "Live Pico connection required for calibration"
-                elif start_count is None:
-                    scale_calibration_status = "Capture Z start before calibrating"
-                elif not distance_text:
-                    scale_calibration_status = "Enter the known Z travel first"
-                else:
-                    try:
-                        factor = scale_compensation_for_travel(
-                            float(distance_text), z_pulses - start_count, metric=is_metric
-                        )
-                        set_scale_compensation("Z", factor)
-                        scale_calibration_start_counts["Z"] = None
-                        scale_calibration_status = f"Z factor saved: {factor:.6f}"
-                    except ValueError as error:
-                        scale_calibration_status = str(error)
-                    except OSError:
-                        scale_calibration_status = "Could not save scale calibration"
-            elif setup_buttons["COMP_X_UP"].collidepoint(pos):
-                try:
-                    set_scale_compensation("X", x_linear_error_comp + 0.0001)
-                    scale_calibration_status = "X fine adjustment saved"
-                except OSError:
-                    scale_calibration_status = "Could not save X scale calibration"
-            elif setup_buttons["COMP_X_DN"].collidepoint(pos):
-                try:
-                    set_scale_compensation("X", x_linear_error_comp - 0.0001)
-                    scale_calibration_status = "X fine adjustment saved"
-                except (ValueError, OSError) as error:
-                    scale_calibration_status = str(error) if isinstance(error, ValueError) else "Could not save X scale calibration"
-            elif setup_buttons["COMP_Z_UP"].collidepoint(pos):
-                try:
-                    set_scale_compensation("Z", z_linear_error_comp + 0.0001)
-                    scale_calibration_status = "Z fine adjustment saved"
-                except OSError:
-                    scale_calibration_status = "Could not save Z scale calibration"
-            elif setup_buttons["COMP_Z_DN"].collidepoint(pos):
-                try:
-                    set_scale_compensation("Z", z_linear_error_comp - 0.0001)
-                    scale_calibration_status = "Z fine adjustment saved"
-                except (ValueError, OSError) as error:
-                    scale_calibration_status = str(error) if isinstance(error, ValueError) else "Could not save Z scale calibration"
+            elif any(setup_buttons[f"CAL_{axis}_{action}"].collidepoint(pos)
+                     for axis in calibration_axes
+                     for action in ("DISTANCE", "START", "APPLY")):
+                for axis in calibration_axes:
+                    if setup_buttons[f"CAL_{axis}_DISTANCE"].collidepoint(pos):
+                        calibration_state["active_axis"] = axis
+                        break
+                    if setup_buttons[f"CAL_{axis}_START"].collidepoint(pos):
+                        if DEMO_MODE or serial_connection is None:
+                            scale_calibration_status = "Live Pico connection required for calibration"
+                        else:
+                            calibration_start_counts[axis] = {
+                                "X": x_pulses, "Y": y_pulses, "Z": z_pulses
+                            }[axis]
+                            calibration_state["active_axis"] = axis
+                            scale_calibration_status = f"{axis} start captured; move {axis} by the entered distance"
+                        break
+                    if setup_buttons[f"CAL_{axis}_APPLY"].collidepoint(pos):
+                        start_count = calibration_start_counts[axis]
+                        distance_text = calibration_distances[axis]
+                        if DEMO_MODE or serial_connection is None:
+                            scale_calibration_status = "Live Pico connection required for calibration"
+                        elif start_count is None:
+                            scale_calibration_status = f"Capture {axis} start before calibrating"
+                        elif not distance_text:
+                            scale_calibration_status = f"Enter the known {axis} travel first"
+                        else:
+                            current_count = {"X": x_pulses, "Y": y_pulses, "Z": z_pulses}[axis]
+                            try:
+                                factor = scale_compensation_for_travel(
+                                    float(distance_text), current_count - start_count,
+                                    metric=calibration_metric_mode
+                                )
+                                if setup_return_state == STATE_MILL_DRO:
+                                    set_mill_scale_compensation(axis, factor)
+                                else:
+                                    set_scale_compensation(axis, factor)
+                                calibration_start_counts[axis] = None
+                                scale_calibration_status = f"{axis} factor saved: {factor:.6f}"
+                            except ValueError as error:
+                                scale_calibration_status = str(error)
+                            except OSError:
+                                scale_calibration_status = "Could not save scale calibration"
+                        break
+            elif any(setup_buttons[f"COMP_{axis}_{direction}"].collidepoint(pos)
+                     for axis in calibration_axes
+                     for direction in ("UP", "DN")):
+                for axis in calibration_axes:
+                    direction = 1 if setup_buttons[f"COMP_{axis}_UP"].collidepoint(pos) else -1
+                    if setup_buttons[f"COMP_{axis}_{'UP' if direction > 0 else 'DN'}"].collidepoint(pos):
+                        try:
+                            factor = calibration_factors[axis.lower()] + direction * 0.0001
+                            if setup_return_state == STATE_MILL_DRO:
+                                set_mill_scale_compensation(axis, factor)
+                            else:
+                                set_scale_compensation(axis, factor)
+                            scale_calibration_status = f"{axis} fine adjustment saved"
+                        except (ValueError, OSError) as error:
+                            scale_calibration_status = (
+                                str(error) if isinstance(error, ValueError)
+                                else f"Could not save {axis} scale calibration"
+                            )
+                        break
             elif taper_buttons["CLEAR"].collidepoint(pos):
-                scale_calibration_distances[active_scale_calibration_axis] = ""
+                calibration_distances[calibration_state["active_axis"]] = ""
             else:
                 for key, rect in keypad_buttons.items():
                     if rect.collidepoint(pos):
-                        axis = active_scale_calibration_axis
-                        value = scale_calibration_distances[axis]
+                        axis = calibration_state["active_axis"]
+                        value = calibration_distances[axis]
                         if key == "DEL":
-                            scale_calibration_distances[axis] = value[:-1]
+                            calibration_distances[axis] = value[:-1]
                         elif key == ".":
                             if "." not in value:
-                                scale_calibration_distances[axis] = value + "."
+                                calibration_distances[axis] = value + "."
                         elif len(value) < 12:
-                            scale_calibration_distances[axis] = value + key
+                            calibration_distances[axis] = value + key
                         break
 
         # DRAW SETUP INTERFACE DASHBOARD
@@ -1556,22 +1868,21 @@ while running:
         resolution_label = font_small.render(f"DISPLAY STEP: {resolution_tier: .4f} in", True, WHITE)
         screen.blit(resolution_label, resolution_label.get_rect(center=setup_buttons["RES_TOGGLE"].center))
 
-        unit = "mm" if is_metric else "in"
-        for axis, y_position, factor in (
-            ("X", 150, x_linear_error_comp),
-            ("Z", 370, z_linear_error_comp),
-        ):
+        unit = "mm" if calibration_metric_mode else "in"
+        for axis in calibration_axes:
+            y_position = calibration_y_positions[axis]
+            factor = calibration_factors[axis.lower()]
             field_rect = setup_buttons[f"CAL_{axis}_DISTANCE"]
             screen.blit(font_small.render(f"{axis} KNOWN LINEAR TRAVEL ({unit})", True, CYAN),
                         (field_rect.x, y_position))
             pygame.draw.rect(screen, MED_GREY, field_rect)
             pygame.draw.rect(
                 screen,
-                YELLOW if active_scale_calibration_axis == axis else WHITE,
+                YELLOW if calibration_state["active_axis"] == axis else WHITE,
                 field_rect,
                 3,
             )
-            distance_text = scale_calibration_distances[axis] or "Enter distance"
+            distance_text = calibration_distances[axis] or "Enter distance"
             distance_surface = font_small.render(distance_text, True, WHITE)
             screen.blit(distance_surface, distance_surface.get_rect(center=field_rect.center))
 
@@ -1582,14 +1893,14 @@ while running:
                 rect = setup_buttons[button_name]
                 pygame.draw.rect(screen, MED_GREY, rect)
                 pygame.draw.rect(screen, color, rect, 2)
-                text = font_small.render(label, True, WHITE)
+                text = font_button.render(label, True, WHITE)
                 screen.blit(text, text.get_rect(center=rect.center))
 
             factor_text = font_small.render(f"{axis} correction factor: {factor:.6f}", True, WHITE)
             screen.blit(factor_text, (50, y_position + 122))
             for button_name, label, color in (
-                (f"COMP_{axis}_UP", "+ 0.0001", GREEN),
-                (f"COMP_{axis}_DN", "- 0.0001", RED),
+                (f"COMP_{axis}_UP", "+", GREEN),
+                (f"COMP_{axis}_DN", "-", RED),
             ):
                 rect = setup_buttons[button_name]
                 pygame.draw.rect(screen, MED_GREY, rect)
@@ -1598,7 +1909,7 @@ while running:
                 screen.blit(text, text.get_rect(center=rect.center))
 
         instruction = "Enter measured axis travel; capture start, move that distance, then calibrate. Use linear travel, not X diameter."
-        draw_wrapped_text(screen, instruction, font_small, WHITE, (50, 595), width - 430)
+        draw_wrapped_text(screen, instruction, font_small, WHITE, (50, 575), width - 430)
         if scale_calibration_status:
             draw_wrapped_text(screen, scale_calibration_status, font_small, YELLOW, (50, 645), width - 430)
 

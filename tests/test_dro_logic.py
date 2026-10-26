@@ -1,5 +1,6 @@
 import pytest
 
+import lathe_dro_pro as dro
 from lathe_dro_pro import (
     load_tool_touch_positions,
     compound_rest_angle,
@@ -13,6 +14,8 @@ from lathe_dro_pro import (
     round_to_precision,
     save_tool_touch_positions,
     load_scale_calibration,
+    mill_half_origin,
+    mill_preset_origin,
     save_scale_calibration,
     shoulder_distance,
     scale_compensation_for_travel,
@@ -27,11 +30,15 @@ from lathe_dro_pro import (
 
 
 def test_parse_serial_packet_valid_line():
-    assert parse_serial_packet("X:123,Z:456,RPM:720") == (123, 456, 720)
+    assert parse_serial_packet("X:123,Y:789,Z:456,RPM:720") == (123, 789, 456, 720)
+
+
+def test_parse_serial_packet_supports_legacy_lathe_packet():
+    assert parse_serial_packet("X:123,Z:456,RPM:720") == (123, 0, 456, 720)
 
 
 def test_parse_serial_packet_empty_line():
-    assert parse_serial_packet("") == (0, 0, 0)
+    assert parse_serial_packet("") == (0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("packet", ["X:no,Z:2,RPM:3", "X:1,Z:2", "bad packet"])
@@ -43,7 +50,7 @@ def test_parse_serial_packet_rejects_malformed_lines(packet):
 def test_read_serial_packets_waits_for_complete_line():
     class FakeConnection:
         def __init__(self):
-            self.data = b"X:12,Z:34"
+            self.data = b"X:12,Y:56,Z:34"
 
         @property
         def in_waiting(self):
@@ -57,10 +64,10 @@ def test_read_serial_packets_waits_for_complete_line():
     pending, packet = read_serial_packets(connection, "")
     assert packet is None
 
-    connection.data = b",RPM:56\n"
+    connection.data = b",RPM:78\n"
     pending, packet = read_serial_packets(connection, pending)
     assert pending == ""
-    assert packet == (12, 34, 56)
+    assert packet == (12, 56, 34, 78)
 
 
 def test_round_to_precision_uses_0005_inch_steps():
@@ -85,6 +92,38 @@ def test_scale_compensation_for_travel_calibrates_nominal_counts():
     assert scale_compensation_for_travel(25.4, -25400, metric=True) == pytest.approx(1.0)
 
 
+def test_mill_preset_origin_sets_requested_inch_and_metric_coordinates():
+    assert mill_preset_origin(50000, 1.0, 1.0) == 24600
+    assert mill_preset_origin(50000, 25.4, 1.0, metric=True) == 24600
+    assert mill_preset_origin(50000, -1.0, 1.0, direction=-1) == 24600
+
+
+def test_mill_half_origin_halves_current_position_without_losing_counts():
+    assert mill_half_origin(50000, 24600) == 37300
+    assert mill_half_origin(50000, 50000) == 50000
+
+
+def test_mill_preset_origin_rejects_bad_axis_direction_and_calibration():
+    with pytest.raises(ValueError):
+        mill_preset_origin(1000, 1.0, 1.0, direction=0)
+    with pytest.raises(ValueError):
+        mill_preset_origin(1000, 1.0, 0)
+
+
+def test_mill_scale_calibration_saves_separately_from_lathe(tmp_path, monkeypatch):
+    lathe_factors = {"x": 1.002, "y": 1.0, "z": 0.998}
+    mill_factors = {"x": 1.01, "y": 1.0, "z": 0.99}
+    monkeypatch.setattr(dro, "scale_calibration_factors", lathe_factors)
+    monkeypatch.setattr(dro, "mill_scale_calibration_factors", mill_factors)
+
+    path = tmp_path / "mill_scale_calibration.json"
+    dro.set_mill_scale_compensation("Y", 1.005, path=path)
+
+    assert dro.mill_scale_calibration_factors == {"x": 1.01, "y": 1.005, "z": 0.99}
+    assert dro.scale_calibration_factors == lathe_factors
+    assert load_scale_calibration(path) == {"x": 1.01, "y": 1.005, "z": 0.99}
+
+
 @pytest.mark.parametrize(
     "distance, count_delta, metric",
     [(0, 1000, False), (1, 0, False), (-1, 1000, False)],
@@ -98,11 +137,11 @@ def test_scale_compensation_for_travel_rejects_invalid_measurements(
 
 def test_scale_calibration_persists_and_ignores_invalid_factors(tmp_path):
     path = tmp_path / "scale_calibration.json"
-    save_scale_calibration(path, {"x": 1.002, "z": 0.998})
-    assert load_scale_calibration(path) == {"x": 1.002, "z": 0.998}
+    save_scale_calibration(path, {"x": 1.002, "y": 1.001, "z": 0.998})
+    assert load_scale_calibration(path) == {"x": 1.002, "y": 1.001, "z": 0.998}
 
     path.write_text('{"x": -1, "z": "invalid"}', encoding="utf-8")
-    assert load_scale_calibration(path) == {"x": 1.0, "z": 1.0}
+    assert load_scale_calibration(path) == {"x": 1.0, "y": 1.0, "z": 1.0}
 
 
 def test_compound_rest_angle_is_half_taper_angle():

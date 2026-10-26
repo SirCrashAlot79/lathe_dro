@@ -6,8 +6,8 @@
 > calibration are configured. Verify machine-specific FEED and SPEED reference
 > values before relying on them.
 
-The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial.
-The main DRO boot screen displays `assets/south_bend_badge.png`; keep this image beside the app.
+The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial. After startup, choose either the South Bend lathe or the Grizzly G0704 mill. The mill DRO includes independent absolute/incremental zeroes, inch/mm units, per-axis zero/half/preset, direction reversal, midpoint/distance/bolt-circle calculators, and separate persistent X/Y/Z scale calibration from the lathe settings.
+The machine-selection screen uses `assets/south_bend_badge.png` for the lathe button; keep this image beside the app.
 
 ## Screenshots
 
@@ -108,14 +108,20 @@ Build the Pico 2 image:
 ```
 
 The UF2 image is written to `build-pico2/lathe_dro_pico.uf2`. Hold BOOTSEL while connecting the Pico 2 over USB, then copy the UF2 file to its mounted boot drive.
+The three-axis mill requires this updated firmware (including the Y count in the serial packet); an older lathe-only UF2 will leave the mill Y readout inactive.
+
+On Windows, rebuild from PowerShell with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_pico2.ps1`. The process-scoped policy handles Windows installations that block local scripts by default. The script adds Git for Windows' MinGW runtime DLL directory to the build process so the Pico SDK's `picotool` can start; neither setting changes the system-wide PATH or execution policy.
 
 ## Wiring and Calibration
 
 - X scale channels A/B use GPIO 2/3.
 - Z scale channels A/B use GPIO 4/5.
-- The spindle sensor output uses GPIO 6.
+- Y scale channels A/B use GPIO 6/7.
+- The spindle sensor output uses GPIO 8.
+- The Pico is shared by the lathe and mill. Reassign the scale connections when changing machines: lathe X/Z use GP2/3 and GP4/5; mill X/Y/Z use GP2/3, GP6/7, and GP4/5. The firmware counts all three input pairs continuously; machine selection changes the readout, not GPIO routing. Use a suitable physical connector switch or reconnect the scale leads with power off.
+- In the mill DRO, `ZERO` sets the selected axis to zero, `HALF` halves its displayed coordinate (useful for finding center), `SET` presets a coordinate, and `DIR` reverses that axis's displayed direction. `COORD` opens midpoint, shoulder-distance, and bolt-circle tools. Mill unit mode and axis directions are independent of the lathe; mill scale calibration is stored separately in `mill_scale_calibration.json`.
 - Keep Pico GPIO signals within 0-3.3 V; level-shift or condition scale and sensor outputs as required.
 - The DRO currently assumes 25,400 scale counts per inch and four spindle sensor pulses per revolution. Verify these values against the installed scales and sensor before relying on measurements.
-- To calibrate an axis, select INCH/MM on the main screen, open `SETUP`, enter a known linear travel in that unit, and click `CAPTURE X START` or `CAPTURE Z START` at the starting point. Move that axis by the measured distance, then click `CALIBRATE X` or `CALIBRATE Z`. Use a long, trusted measurement and approach both endpoints consistently to reduce measurement error and backlash.
+- To calibrate an axis, select INCH/MM on the main screen, open `SETUP`, enter a known linear travel in that unit, and click `CAPTURE <axis> START` at the starting point. Move that axis by the measured distance, then click `CALIBRATE <axis>`. Use a long, trusted measurement and approach both endpoints consistently to reduce measurement error and backlash.
 - Calibration uses raw count change, independent of zero and RAD/DIA display modes. For X, enter physical cross-slide (radial) travel, not the doubled diameter display. The correction factors and fine adjustments persist in `scale_calibration.json` beside the Python app; scale count convention and accuracy still need verification against the installed hardware.
 - Tool touch-offs are stored in `tool_offsets.json` beside the Python app. Capture T-1 at the reference datum, then capture each other tool at the same datum.
