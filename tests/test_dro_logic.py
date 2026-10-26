@@ -17,8 +17,16 @@ from lathe_dro_pro import (
     load_scale_calibration,
     mill_half_origin,
     mill_preset_origin,
+    load_mill_sub_datums,
+    save_mill_sub_datums,
     save_scale_calibration,
     shoulder_distance,
+    linear_hole_coordinates,
+    grid_hole_coordinates,
+    cutter_radius_compensated_point,
+    standard_calculation,
+    trigonometric_calculation,
+    slope_calculation,
     scale_compensation_for_travel,
     spindle_rpm_for_surface_speed,
     thread_setting_for,
@@ -140,6 +148,56 @@ def test_mill_scale_calibration_saves_separately_from_lathe(tmp_path, monkeypatc
     assert dro.mill_scale_calibration_factors == {"x": 1.01, "y": 1.005, "z": 0.99}
     assert dro.scale_calibration_factors == lathe_factors
     assert load_scale_calibration(path) == {"x": 1.01, "y": 1.005, "z": 0.99}
+
+
+def test_bolt_circle_coordinates_can_be_centered_on_a_datum():
+    points = dro.bolt_circle_coordinates(4, 4, center_x=10, center_y=-2)
+    assert points[0] == pytest.approx((12, -2))
+    assert points[1] == pytest.approx((10, 0))
+
+
+def test_linear_hole_pattern_supports_tilted_absolute_coordinates():
+    points = linear_hole_coordinates(1, 2, 3, 0.5, 90)
+    assert points == pytest.approx([(1, 2), (1, 2.5), (1, 3)])
+
+
+def test_grid_hole_pattern_supports_rotation_and_row_major_order():
+    points = grid_hole_coordinates(1, 2, 2, 2, 3, 4, 90)
+    expected = [(1, 2), (1, 5), (-3, 2), (-3, 5)]
+    for point, expected_point in zip(points, expected):
+        assert point == pytest.approx(expected_point)
+
+
+def test_grid_hole_pattern_limits_total_holes_and_requires_steps():
+    with pytest.raises(ValueError):
+        grid_hole_coordinates(0, 0, 5, 5, 1, 1)
+    with pytest.raises(ValueError):
+        grid_hole_coordinates(0, 0, 1, 2, 0, 1)
+
+
+def test_cutter_radius_compensation_offsets_left_and_right():
+    assert cutter_radius_compensated_point(1, 2, 0.5, 0, "LEFT") == pytest.approx((1, 2.25))
+    assert cutter_radius_compensated_point(1, 2, 0.5, 0, "RIGHT") == pytest.approx((1, 1.75))
+
+
+@pytest.mark.parametrize(
+    "function,value,expected",
+    [("SIN", 30, 0.5), ("COS", 60, 0.5), ("TAN", 45, 1), ("ASIN", 0.5, 30)],
+)
+def test_mill_trigonometric_calculations_use_degrees(function, value, expected):
+    assert trigonometric_calculation(function, value) == pytest.approx(expected)
+
+
+def test_calculator_and_slope_results():
+    assert standard_calculation(6, 3, "/") == 2
+    assert slope_calculation(2, 4) == pytest.approx((0.5, 50, 26.565051177))
+
+
+def test_sub_datum_storage_round_trips_named_axis_counts(tmp_path):
+    path = tmp_path / "mill_sub_datums.json"
+    datums = {"DATUM 1": {"X": 12, "Y": -34, "Z": 56}}
+    save_mill_sub_datums(path, datums)
+    assert load_mill_sub_datums(path) == datums
 
 
 @pytest.mark.parametrize(

@@ -9,4 +9,5 @@ pico-sdk/
 tool_offsets.json
 scale_calibration.json
 mill_scale_calibration.json
+mill_sub_datums.json
 *.py[cod]
