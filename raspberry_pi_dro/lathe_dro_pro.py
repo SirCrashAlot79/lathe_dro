@@ -37,7 +37,7 @@ SPINDLE_SPEED_STEPS = {
 
 
 def parse_serial_packet(line):
-    """Parse one firmware packet in X:<count>,Z:<count>,RPM:<rpm> format."""
+    """Parse lathe X/Z counts from the current or a legacy firmware packet."""
     if not line.strip():
         return 0, 0, 0
 
@@ -47,6 +47,8 @@ def parse_serial_packet(line):
         values[key.strip().upper()] = int(value.strip())
 
     try:
+        if "LX" in values and "LZ" in values:
+            return values["LX"], values["LZ"], values["RPM"]
         return values["X"], values["Z"], values["RPM"]
     except KeyError as error:
         raise ValueError(f"Missing {error.args[0]} field in serial packet") from error

@@ -63,7 +63,7 @@ See [`PARTS_AND_PRINTING.md`](PARTS_AND_PRINTING.md) for the BOM and printed mou
 
 ## Pico Firmware
 
-The host app reads X/Z/RPM from the Pico 2 USB serial packet `X:<count>,Y:<count>,Z:<count>,RPM:<rpm>`; the Pi lathe app ignores the additional Y field. You can flash the already-built `build-pico2/lathe_dro_pico.uf2` from a Windows PC as before.
+The host app reads its lathe X/Z/RPM counts from the Pico 2 USB serial packet `LX:<count>,LZ:<count>,MX:<count>,MY:<count>,MZ:<count>,RPM:<rpm>`. Older `X/Y/Z/RPM` packets remain supported. You can flash the already-built `build-pico2/lathe_dro_pico.uf2` from a Windows PC as before.
 
 To rebuild firmware on the Pi, install the ARM compiler and build tools, get the Pico SDK version used by this project, then build:
 
@@ -79,7 +79,9 @@ The UF2 will be generated at `build-pico2/lathe_dro_pico.uf2` within this folder
 
 ## Scales and Sensor
 
-- X A/B conditioned logic outputs go to Pico GP2/GP3; Z A/B go to GP4/GP5; the additional Y pair uses GP6/GP7; spindle tach output uses GP8.
+- Lathe X A/B conditioned logic outputs go to Pico GP9/GP10; lathe Z A/B go to GP11/GP12. These inputs are independent from the mill scale inputs.
+- Mill X A/B use GP2/GP3, mill Z A/B use GP4/GP5, and mill Y A/B use GP6/GP7.
+- Spindle tach output uses GP8.
 - Pico GPIO must never exceed 0-3.3 V. The Ditron scale listing specifies standard TTL and offers EIA-422 by request; confirm which output was supplied. Use an appropriate interface for the actual output voltage/type before connecting it to the Pico.
 - Keep each encoder A/B pair routed together, away from motor wiring. Join the interface signal ground to Pico ground only as required by that interface.
 - The selected LJ12A3-4-Z/BX tach sensor is specified for a 6-36 V supply. If used, power it from the PC supply's 12 V rail (brown +, blue 0 V, black output per its listing). Confirm the NPN output is open-collector/sinking before using GP8's internal 3.3 V pull-up; never put 12 V on a GPIO.

@@ -29,6 +29,12 @@ def test_parse_serial_packet_valid_line():
     assert parse_serial_packet("X:123,Z:456,RPM:720") == (123, 456, 720)
 
 
+def test_parse_serial_packet_uses_separate_lathe_counts():
+    assert parse_serial_packet("LX:123,LZ:456,MX:789,MY:321,MZ:654,RPM:720") == (
+        123, 456, 720
+    )
+
+
 def test_parse_serial_packet_empty_line():
     assert parse_serial_packet("") == (0, 0, 0)
 

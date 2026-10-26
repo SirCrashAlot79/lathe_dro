@@ -8,6 +8,7 @@ from lathe_dro_pro import (
     boring_hole_diameter,
     coordinate_midpoint,
     parse_serial_packet,
+    counts_for_machine,
     recommend_spindle_step,
     read_serial_packets,
     request_system_poweroff,
@@ -30,15 +31,32 @@ from lathe_dro_pro import (
 
 
 def test_parse_serial_packet_valid_line():
-    assert parse_serial_packet("X:123,Y:789,Z:456,RPM:720") == (123, 789, 456, 720)
+    assert parse_serial_packet("LX:123,LZ:456,MX:789,MY:321,MZ:654,RPM:720") == (
+        123, 456, 789, 321, 654, 720
+    )
+
+
+def test_parse_serial_packet_supports_legacy_xyz_packet():
+    assert parse_serial_packet("X:123,Y:789,Z:456,RPM:720") == (
+        123, 456, 123, 789, 456, 720
+    )
 
 
 def test_parse_serial_packet_supports_legacy_lathe_packet():
-    assert parse_serial_packet("X:123,Z:456,RPM:720") == (123, 0, 456, 720)
+    assert parse_serial_packet("X:123,Z:456,RPM:720") == (
+        123, 456, 123, 0, 456, 720
+    )
+
+
+def test_counts_for_machine_selects_independent_scale_counts():
+    lathe_counts = (123, 456)
+    mill_counts = (789, 321, 654)
+    assert counts_for_machine("lathe", lathe_counts, mill_counts) == (123, 0, 456)
+    assert counts_for_machine("mill", lathe_counts, mill_counts) == mill_counts
 
 
 def test_parse_serial_packet_empty_line():
-    assert parse_serial_packet("") == (0, 0, 0, 0)
+    assert parse_serial_packet("") == (0, 0, 0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("packet", ["X:no,Z:2,RPM:3", "X:1,Z:2", "bad packet"])
@@ -50,7 +68,7 @@ def test_parse_serial_packet_rejects_malformed_lines(packet):
 def test_read_serial_packets_waits_for_complete_line():
     class FakeConnection:
         def __init__(self):
-            self.data = b"X:12,Y:56,Z:34"
+            self.data = b"LX:12,LZ:34,MX:56,MY:78,MZ:90"
 
         @property
         def in_waiting(self):
@@ -67,7 +85,7 @@ def test_read_serial_packets_waits_for_complete_line():
     connection.data = b",RPM:78\n"
     pending, packet = read_serial_packets(connection, pending)
     assert pending == ""
-    assert packet == (12, 56, 34, 78)
+    assert packet == (12, 34, 56, 78, 90, 78)
 
 
 def test_round_to_precision_uses_0005_inch_steps():

@@ -40,24 +40,41 @@ SPINDLE_SPEED_STEPS = {
 
 
 def parse_serial_packet(line):
-    """Parse one firmware packet containing X/Y/Z counts and spindle RPM."""
+    """Parse separate lathe/mill counts or a legacy shared-axis packet."""
     if not line.strip():
-        return 0, 0, 0, 0
+        return 0, 0, 0, 0, 0, 0
 
     values = {}
     for field in line.strip().split(","):
         key, value = field.split(":", 1)
         values[key.strip().upper()] = int(value.strip())
 
-    try:
+    if {"LX", "LZ", "MX", "MY", "MZ", "RPM"}.issubset(values):
         return (
-            values["X"],
-            values.get("Y", 0),
-            values["Z"],
+            values["LX"],
+            values["LZ"],
+            values["MX"],
+            values["MY"],
+            values["MZ"],
             values["RPM"],
         )
+
+    try:
+        x_count = values["X"]
+        z_count = values["Z"]
+        y_count = values.get("Y", 0)
+        rpm_count = values["RPM"]
     except KeyError as error:
         raise ValueError(f"Missing {error.args[0]} field in serial packet") from error
+    return x_count, z_count, x_count, y_count, z_count, rpm_count
+
+
+def counts_for_machine(machine, lathe_counts, mill_counts):
+    if machine == "lathe":
+        return lathe_counts[0], 0, lathe_counts[1]
+    if machine == "mill":
+        return mill_counts
+    raise ValueError(f"Unknown machine: {machine}")
 
 
 def find_pico_port():
@@ -378,7 +395,10 @@ current_state = STATE_BOOT
 setup_return_state = STATE_MAIN_DRO
 
 # --- SYSTEM & CALIBRATION CALCULATION REGISTERS ---
+lathe_x_pulses, lathe_z_pulses = 0, 0
+mill_x_pulses, mill_y_pulses, mill_z_pulses = 0, 0, 0
 x_pulses, y_pulses, z_pulses, rpm = 0, 0, 0, 0
+selected_machine = "lathe"
 x_abs_zero, y_abs_zero, z_abs_zero = 0, 0, 0
 x_inc_zero, y_inc_zero, z_inc_zero = 0, 0, 0
 mill_abs_zero = {"X": 0, "Y": 0, "Z": 0}
@@ -833,19 +853,34 @@ while running:
     # 2. RUN SIMULATED HARDWARE FEEDBACK ENGINE
     if DEMO_MODE:
         if frame_counter % 2 == 0:
-            x_pulses += int(10 * math.sin(frame_counter / 60.0))
-            y_pulses += int(20 * math.sin(frame_counter / 90.0))
-            z_pulses += int(35 * math.cos(frame_counter / 120.0))
+            lathe_x_pulses += int(10 * math.sin(frame_counter / 60.0))
+            lathe_z_pulses += int(35 * math.cos(frame_counter / 120.0))
+            mill_x_pulses += int(10 * math.sin(frame_counter / 60.0))
+            mill_y_pulses += int(20 * math.sin(frame_counter / 90.0))
+            mill_z_pulses += int(35 * math.cos(frame_counter / 120.0))
         rpm = int(720 + (12 * math.sin(frame_counter / 15.0)))
     elif serial_connection is not None:
         try:
             serial_buffer, packet = read_serial_packets(serial_connection, serial_buffer)
             if packet is not None:
-                x_pulses, y_pulses, z_pulses, rpm = packet
+                (
+                    lathe_x_pulses,
+                    lathe_z_pulses,
+                    mill_x_pulses,
+                    mill_y_pulses,
+                    mill_z_pulses,
+                    rpm,
+                ) = packet
         except serial.SerialException:
             connection_status = "Serial connection lost"
             serial_connection.close()
             serial_connection = None
+
+    x_pulses, y_pulses, z_pulses = counts_for_machine(
+        selected_machine,
+        (lathe_x_pulses, lathe_z_pulses),
+        (mill_x_pulses, mill_y_pulses, mill_z_pulses),
+    )
 
     # 3. EVALUATE WINDOW EXECUTION STATES
     if current_state == STATE_BOOT:
@@ -873,8 +908,10 @@ while running:
     elif current_state == STATE_MACHINE_SELECT:
         if clicked:
             if machine_select_buttons["LATHE"].collidepoint(pos):
+                selected_machine = "lathe"
                 current_state = STATE_MAIN_DRO
             elif machine_select_buttons["MILL"].collidepoint(pos):
+                selected_machine = "mill"
                 current_state = STATE_MILL_DRO
 
         draw_industrial_background(screen, width, height)

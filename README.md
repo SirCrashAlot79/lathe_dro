@@ -108,17 +108,18 @@ Build the Pico 2 image:
 ```
 
 The UF2 image is written to `build-pico2/lathe_dro_pico.uf2`. Hold BOOTSEL while connecting the Pico 2 over USB, then copy the UF2 file to its mounted boot drive.
-The three-axis mill requires this updated firmware (including the Y count in the serial packet); an older lathe-only UF2 will leave the mill Y readout inactive.
+The firmware reads five scales independently: lathe X/Z and mill X/Y/Z. Its serial packet carries separate lathe (`LX`, `LZ`) and mill (`MX`, `MY`, `MZ`) counts; older UF2 images do not support the separate machine inputs.
 
 On Windows, rebuild from PowerShell with `powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\build_pico2.ps1`. The process-scoped policy handles Windows installations that block local scripts by default. The script adds Git for Windows' MinGW runtime DLL directory to the build process so the Pico SDK's `picotool` can start; neither setting changes the system-wide PATH or execution policy.
 
 ## Wiring and Calibration
 
-- X scale channels A/B use GPIO 2/3.
-- Z scale channels A/B use GPIO 4/5.
-- Y scale channels A/B use GPIO 6/7.
+- Mill X scale channels A/B use GPIO 2/3.
+- Mill Z scale channels A/B use GPIO 4/5.
+- Mill Y scale channels A/B use GPIO 6/7.
 - The spindle sensor output uses GPIO 8.
-- The Pico is shared by the lathe and mill. Reassign the scale connections when changing machines: lathe X/Z use GP2/3 and GP4/5; mill X/Y/Z use GP2/3, GP6/7, and GP4/5. The firmware counts all three input pairs continuously; machine selection changes the readout, not GPIO routing. Use a suitable physical connector switch or reconnect the scale leads with power off.
+- Lathe X scale channels A/B use GPIO 9/10; lathe Z channels A/B use GPIO 11/12.
+- All five scale pairs have independent GPIO inputs and can remain connected. The firmware reads them continuously; choosing a machine selects the corresponding counts for its DRO. Power off before making wiring changes.
 - In the mill DRO, `ZERO` sets the selected axis to zero, `HALF` halves its displayed coordinate (useful for finding center), `SET` presets a coordinate, and `DIR` reverses that axis's displayed direction. `COORD` opens midpoint, shoulder-distance, and bolt-circle tools. Mill unit mode and axis directions are independent of the lathe; mill scale calibration is stored separately in `mill_scale_calibration.json`.
 - Keep Pico GPIO signals within 0-3.3 V; level-shift or condition scale and sensor outputs as required.
 - The DRO currently assumes 25,400 scale counts per inch and four spindle sensor pulses per revolution. Verify these values against the installed scales and sensor before relying on measurements.
