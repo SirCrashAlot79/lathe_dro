@@ -1,15 +1,15 @@
-# Lathe DRO: Dell Latitude 7275 and Raspberry Pi Pico 2
+# Lathe and Mill DRO: Dell Latitude 7275, Raspberry Pi, and Pico 2
 
 > **Machine compatibility:** The main configuration is tailored to a South Bend
-> 10K lathe with a Model A quick-change gearbox. The Raspberry Pi version is a
-> general-purpose DRO host for any lathe once its scales, spindle sensor, and
-> calibration are configured. Verify machine-specific FEED and SPEED reference
-> values before relying on them.
+> 10K lathe with a Model A quick-change gearbox and a Grizzly G0704 mill. The
+> Raspberry Pi host supports both DRO modes; configure and verify the installed
+> scales, spindle sensor, and machine-specific values before relying on them.
 
-The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial. After startup, choose either the South Bend lathe or the Grizzly G0704 mill. The mill DRO includes independent absolute/incremental zeroes, inch/mm units, per-axis zero/half/preset, direction reversal, separate persistent X/Y/Z calibration, and advanced tools for PCD, linear and grid hole patterns, cutter-radius offsets, arithmetic/trigonometry/slope calculations, and eight saved sub-datums.
-The machine-selection screen uses `assets/south_bend_badge.png` for the lathe button; keep this image beside the app.
+The Dell and Raspberry Pi run the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial. Choose either the South Bend lathe or Grizzly G0704 mill after startup. The mill DRO includes independent absolute/incremental zeroes, inch/mm units, per-axis zero/half/preset, direction reversal, separate persistent X/Y/Z calibration, and tools for PCD, linear and grid hole patterns, cutter-radius offsets, arithmetic/trigonometry/slope calculations, and eight saved sub-datums. The machine-selection screen uses `assets/south_bend_badge.png` for the lathe button; keep this image beside the app.
 
-The Raspberry Pi host app in [`raspberry_pi_dro/`](raspberry_pi_dro/README.md) now provides the same lathe and mill modes and DRO tools on Raspberry Pi OS Desktop. It uses the same five-scale Pico 2 serial data, with Pi-specific installation and autostart instructions in that guide.
+## Raspberry Pi DRO
+
+The `raspberry_pi_dro/` host app now matches the main app's lathe and mill modes, including the lathe FEED, SPEED, TAPER, coordinate, tool-offset and boring tools, and the mill controls and MACROS listed above. It reads all five independent Pico 2 scale inputs; both machine setups can remain connected. Pi-specific hardware, installation, autostart, wiring and calibration instructions are in the [Raspberry Pi guide](raspberry_pi_dro/README.md). The Pi app stores calibration, tool offsets and mill sub-datums alongside its own copy, separate from the Dell app's settings. Its tools are readout/calculation only and do not control machine motion or the spindle.
 
 ## Screenshots
 
