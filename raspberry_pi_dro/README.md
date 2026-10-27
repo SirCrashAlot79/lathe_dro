@@ -1,10 +1,12 @@
-# Raspberry Pi Lathe DRO
+# Raspberry Pi Lathe and Mill DRO
 
-A separate Raspberry Pi host build of the Lathe DRO. It runs the existing Pygame interface fullscreen on Raspberry Pi OS Desktop and communicates with the same Pico 2 firmware over USB serial.
+A Raspberry Pi host build of the Lathe DRO. It runs the same Pygame interface and lathe/mill functions as the main app, fullscreen on Raspberry Pi OS Desktop, and communicates with the same Pico 2 firmware over USB serial. Select the South Bend lathe or Grizzly G0704 mill after startup. The five scale inputs are independent, so both machine setups can stay connected.
+
+The lathe mode includes FEED, SPEED, TAPER, coordinate, tool-offset, and boring tools. The mill mode provides independent inch/mm settings, per-axis zero/half/preset and direction controls, separate calibration, and MACROS for PCD, linear/grid hole patterns, straight-edge cutter-radius offsets, arithmetic, trigonometry, slope, and eight saved sub-datums. These tools display calculations only; they do not control machine motion or the spindle. Verify machine-specific settings and calculated values before use.
 
 ## Screenshots
 
-Captured in demo mode; values are simulated. The Pi version omits the cutting-speed calculator screen but retains the live spindle RPM readout on the main DRO screen.
+Captured in demo mode; values are simulated, not live measurements.
 
 ![Pi DRO boot screen](screenshots/boot-demo.png)
 
@@ -63,7 +65,7 @@ See [`PARTS_AND_PRINTING.md`](PARTS_AND_PRINTING.md) for the BOM and printed mou
 
 ## Pico Firmware
 
-The host app reads its lathe X/Z/RPM counts from the Pico 2 USB serial packet `LX:<count>,LZ:<count>,MX:<count>,MY:<count>,MZ:<count>,RPM:<rpm>`. Older `X/Y/Z/RPM` packets remain supported. You can flash the already-built `build-pico2/lathe_dro_pico.uf2` from a Windows PC as before.
+The host app reads independent lathe X/Z and mill X/Y/Z counts from the Pico 2 USB serial packet `LX:<count>,LZ:<count>,MX:<count>,MY:<count>,MZ:<count>,RPM:<rpm>`. Legacy `X/Z/RPM` and `X/Y/Z/RPM` packets remain supported for lathe operation. You can flash the already-built `build-pico2/lathe_dro_pico.uf2` from a Windows PC as before.
 
 To rebuild firmware on the Pi, install the ARM compiler and build tools, get the Pico SDK version used by this project, then build:
 

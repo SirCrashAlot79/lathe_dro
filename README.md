@@ -9,6 +9,8 @@
 The Dell runs the Pygame touchscreen readout; the Pico 2 reads the scales and spindle sensor and streams counts over USB serial. After startup, choose either the South Bend lathe or the Grizzly G0704 mill. The mill DRO includes independent absolute/incremental zeroes, inch/mm units, per-axis zero/half/preset, direction reversal, separate persistent X/Y/Z calibration, and advanced tools for PCD, linear and grid hole patterns, cutter-radius offsets, arithmetic/trigonometry/slope calculations, and eight saved sub-datums.
 The machine-selection screen uses `assets/south_bend_badge.png` for the lathe button; keep this image beside the app.
 
+The Raspberry Pi host app in [`raspberry_pi_dro/`](raspberry_pi_dro/README.md) now provides the same lathe and mill modes and DRO tools on Raspberry Pi OS Desktop. It uses the same five-scale Pico 2 serial data, with Pi-specific installation and autostart instructions in that guide.
+
 ## Screenshots
 
 Captured in demo mode; displayed readings are simulated, not live measurements.

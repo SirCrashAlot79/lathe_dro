@@ -1,42 +1,70 @@
 import pytest
 
+import lathe_dro_pro as dro
 from lathe_dro_pro import (
     load_tool_touch_positions,
     compound_rest_angle,
     bolt_circle_coordinates,
     boring_hole_diameter,
     coordinate_midpoint,
-    feed_rates_for,
     parse_serial_packet,
+    counts_for_machine,
     recommend_spindle_step,
     read_serial_packets,
     request_system_poweroff,
     round_to_precision,
     save_tool_touch_positions,
     load_scale_calibration,
+    mill_half_origin,
+    mill_preset_origin,
+    load_mill_sub_datums,
+    save_mill_sub_datums,
     save_scale_calibration,
     shoulder_distance,
+    linear_hole_coordinates,
+    grid_hole_coordinates,
+    cutter_radius_compensated_point,
+    standard_calculation,
+    trigonometric_calculation,
+    slope_calculation,
     scale_compensation_for_travel,
     spindle_rpm_for_surface_speed,
     thread_setting_for,
     tool_offset_for,
     tool_corrected_x_count,
+    tool_x_offset_to_counts,
+    tool_position_with_manual_x_offset,
     wrap_text,
 )
 
 
 def test_parse_serial_packet_valid_line():
-    assert parse_serial_packet("X:123,Z:456,RPM:720") == (123, 456, 720)
-
-
-def test_parse_serial_packet_uses_separate_lathe_counts():
     assert parse_serial_packet("LX:123,LZ:456,MX:789,MY:321,MZ:654,RPM:720") == (
-        123, 456, 720
+        123, 456, 789, 321, 654, 720
     )
 
 
+def test_parse_serial_packet_supports_legacy_xyz_packet():
+    assert parse_serial_packet("X:123,Y:789,Z:456,RPM:720") == (
+        123, 456, 123, 789, 456, 720
+    )
+
+
+def test_parse_serial_packet_supports_legacy_lathe_packet():
+    assert parse_serial_packet("X:123,Z:456,RPM:720") == (
+        123, 456, 123, 0, 456, 720
+    )
+
+
+def test_counts_for_machine_selects_independent_scale_counts():
+    lathe_counts = (123, 456)
+    mill_counts = (789, 321, 654)
+    assert counts_for_machine("lathe", lathe_counts, mill_counts) == (123, 0, 456)
+    assert counts_for_machine("mill", lathe_counts, mill_counts) == mill_counts
+
+
 def test_parse_serial_packet_empty_line():
-    assert parse_serial_packet("") == (0, 0, 0)
+    assert parse_serial_packet("") == (0, 0, 0, 0, 0, 0)
 
 
 @pytest.mark.parametrize("packet", ["X:no,Z:2,RPM:3", "X:1,Z:2", "bad packet"])
@@ -48,7 +76,7 @@ def test_parse_serial_packet_rejects_malformed_lines(packet):
 def test_read_serial_packets_waits_for_complete_line():
     class FakeConnection:
         def __init__(self):
-            self.data = b"X:12,Z:34"
+            self.data = b"LX:12,LZ:34,MX:56,MY:78,MZ:90"
 
         @property
         def in_waiting(self):
@@ -62,10 +90,10 @@ def test_read_serial_packets_waits_for_complete_line():
     pending, packet = read_serial_packets(connection, "")
     assert packet is None
 
-    connection.data = b",RPM:56\n"
+    connection.data = b",RPM:78\n"
     pending, packet = read_serial_packets(connection, pending)
     assert pending == ""
-    assert packet == (12, 34, 56)
+    assert packet == (12, 34, 56, 78, 90, 78)
 
 
 def test_round_to_precision_uses_0005_inch_steps():
@@ -90,6 +118,88 @@ def test_scale_compensation_for_travel_calibrates_nominal_counts():
     assert scale_compensation_for_travel(25.4, -25400, metric=True) == pytest.approx(1.0)
 
 
+def test_mill_preset_origin_sets_requested_inch_and_metric_coordinates():
+    assert mill_preset_origin(50000, 1.0, 1.0) == 24600
+    assert mill_preset_origin(50000, 25.4, 1.0, metric=True) == 24600
+    assert mill_preset_origin(50000, -1.0, 1.0, direction=-1) == 24600
+
+
+def test_mill_half_origin_halves_current_position_without_losing_counts():
+    assert mill_half_origin(50000, 24600) == 37300
+    assert mill_half_origin(50000, 50000) == 50000
+
+
+def test_mill_preset_origin_rejects_bad_axis_direction_and_calibration():
+    with pytest.raises(ValueError):
+        mill_preset_origin(1000, 1.0, 1.0, direction=0)
+    with pytest.raises(ValueError):
+        mill_preset_origin(1000, 1.0, 0)
+
+
+def test_mill_scale_calibration_saves_separately_from_lathe(tmp_path, monkeypatch):
+    lathe_factors = {"x": 1.002, "y": 1.0, "z": 0.998}
+    mill_factors = {"x": 1.01, "y": 1.0, "z": 0.99}
+    monkeypatch.setattr(dro, "scale_calibration_factors", lathe_factors)
+    monkeypatch.setattr(dro, "mill_scale_calibration_factors", mill_factors)
+
+    path = tmp_path / "mill_scale_calibration.json"
+    dro.set_mill_scale_compensation("Y", 1.005, path=path)
+
+    assert dro.mill_scale_calibration_factors == {"x": 1.01, "y": 1.005, "z": 0.99}
+    assert dro.scale_calibration_factors == lathe_factors
+    assert load_scale_calibration(path) == {"x": 1.01, "y": 1.005, "z": 0.99}
+
+
+def test_bolt_circle_coordinates_can_be_centered_on_a_datum():
+    points = dro.bolt_circle_coordinates(4, 4, center_x=10, center_y=-2)
+    assert points[0] == pytest.approx((12, -2))
+    assert points[1] == pytest.approx((10, 0))
+
+
+def test_linear_hole_pattern_supports_tilted_absolute_coordinates():
+    points = linear_hole_coordinates(1, 2, 3, 0.5, 90)
+    assert points == pytest.approx([(1, 2), (1, 2.5), (1, 3)])
+
+
+def test_grid_hole_pattern_supports_rotation_and_row_major_order():
+    points = grid_hole_coordinates(1, 2, 2, 2, 3, 4, 90)
+    expected = [(1, 2), (1, 5), (-3, 2), (-3, 5)]
+    for point, expected_point in zip(points, expected):
+        assert point == pytest.approx(expected_point)
+
+
+def test_grid_hole_pattern_limits_total_holes_and_requires_steps():
+    with pytest.raises(ValueError):
+        grid_hole_coordinates(0, 0, 5, 5, 1, 1)
+    with pytest.raises(ValueError):
+        grid_hole_coordinates(0, 0, 1, 2, 0, 1)
+
+
+def test_cutter_radius_compensation_offsets_left_and_right():
+    assert cutter_radius_compensated_point(1, 2, 0.5, 0, "LEFT") == pytest.approx((1, 2.25))
+    assert cutter_radius_compensated_point(1, 2, 0.5, 0, "RIGHT") == pytest.approx((1, 1.75))
+
+
+@pytest.mark.parametrize(
+    "function,value,expected",
+    [("SIN", 30, 0.5), ("COS", 60, 0.5), ("TAN", 45, 1), ("ASIN", 0.5, 30)],
+)
+def test_mill_trigonometric_calculations_use_degrees(function, value, expected):
+    assert trigonometric_calculation(function, value) == pytest.approx(expected)
+
+
+def test_calculator_and_slope_results():
+    assert standard_calculation(6, 3, "/") == 2
+    assert slope_calculation(2, 4) == pytest.approx((0.5, 50, 26.565051177))
+
+
+def test_sub_datum_storage_round_trips_named_axis_counts(tmp_path):
+    path = tmp_path / "mill_sub_datums.json"
+    datums = {"DATUM 1": {"X": 12, "Y": -34, "Z": 56}}
+    save_mill_sub_datums(path, datums)
+    assert load_mill_sub_datums(path) == datums
+
+
 @pytest.mark.parametrize(
     "distance, count_delta, metric",
     [(0, 1000, False), (1, 0, False), (-1, 1000, False)],
@@ -103,11 +213,11 @@ def test_scale_compensation_for_travel_rejects_invalid_measurements(
 
 def test_scale_calibration_persists_and_ignores_invalid_factors(tmp_path):
     path = tmp_path / "scale_calibration.json"
-    save_scale_calibration(path, {"x": 1.002, "z": 0.998})
-    assert load_scale_calibration(path) == {"x": 1.002, "z": 0.998}
+    save_scale_calibration(path, {"x": 1.002, "y": 1.001, "z": 0.998})
+    assert load_scale_calibration(path) == {"x": 1.002, "y": 1.001, "z": 0.998}
 
     path.write_text('{"x": -1, "z": "invalid"}', encoding="utf-8")
-    assert load_scale_calibration(path) == {"x": 1.0, "z": 1.0}
+    assert load_scale_calibration(path) == {"x": 1.0, "y": 1.0, "z": 1.0}
 
 
 def test_compound_rest_angle_is_half_taper_angle():
@@ -122,38 +232,46 @@ def test_compound_rest_angle_rejects_invalid_dimensions():
 @pytest.mark.parametrize(
     "tpi, expected",
     [
-        (4, {"tpi": 4, "stud_gear": 40, "tumbler": "A", "selector_column": 1, "longitudinal_feed_in_per_rev": 0.0853}),
-        (5.75, {"tpi": 5.75, "stud_gear": 40, "tumbler": "A", "selector_column": 5, "longitudinal_feed_in_per_rev": 0.0594}),
-        (11, {"tpi": 11, "stud_gear": 20, "tumbler": "A", "selector_column": 4, "longitudinal_feed_in_per_rev": 0.0310}),
-        (224, {"tpi": 224, "stud_gear": 20, "tumbler": "E", "selector_column": 8, "longitudinal_feed_in_per_rev": 0.0015}),
+        (4, {"tpi": 4, "stud_gear": 40, "tumbler": "A", "selector_column": 1}),
+        (6.75, {"tpi": 6.75, "stud_gear": 40, "tumbler": "A", "selector_column": 8}),
+        (15, {"tpi": 15, "stud_gear": 40, "tumbler": "B", "selector_column": 10}),
+        (40, {"tpi": 40, "stud_gear": 40, "tumbler": "D", "selector_column": 3}),
+        (224, {"tpi": 224, "stud_gear": 40, "tumbler": "F", "selector_column": 9}),
+        (480, {"tpi": 480, "stud_gear": 40, "tumbler": "G", "selector_column": 10}),
     ],
 )
 def test_thread_setting_for_chart_pitches(tpi, expected):
     assert thread_setting_for(tpi) == expected
 
 
+def test_thread_chart_has_seven_rows_and_ten_selector_positions():
+    chart = (
+        (4, 4.5, 5, 5.5, 5.75, 6, 6.5, 6.75, 7, 7.5),
+        (8, 9, 10, 11, 11.5, 12, 13, 13.5, 14, 15),
+        (16, 18, 20, 22, 23, 24, 26, 27, 28, 30),
+        (32, 36, 40, 44, 46, 48, 52, 54, 56, 60),
+        (64, 72, 80, 88, 92, 96, 104, 108, 112, 120),
+        (128, 144, 160, 176, 184, 192, 208, 216, 224, 240),
+        (256, 288, 320, 352, 368, 384, 416, 432, 448, 480),
+    )
+
+    for row_index, pitches in enumerate(chart):
+        for column, tpi in enumerate(pitches, start=1):
+            assert thread_setting_for(tpi) == {
+                "tpi": tpi,
+                "stud_gear": 40,
+                "tumbler": chr(ord("A") + row_index),
+                "selector_column": column,
+            }
+
+
 def test_thread_setting_for_returns_none_for_unlisted_pitch():
-    assert thread_setting_for(13.5) is None
+    assert thread_setting_for(13.25) is None
 
 
 def test_thread_setting_for_rejects_invalid_tpi():
     with pytest.raises(ValueError):
         thread_setting_for(0)
-
-
-def test_feed_rates_include_longitudinal_cross_and_per_minute():
-    assert feed_rates_for(11, 600) == pytest.approx({
-        "longitudinal_per_rev": 0.0310,
-        "cross_per_rev": 0.0310 / 3,
-        "longitudinal_per_min": 18.6,
-        "cross_per_min": 6.2,
-    })
-
-
-def test_feed_rates_convert_chart_values_to_metric():
-    rates = feed_rates_for(11, 600, metric=True)
-    assert rates["longitudinal_per_rev"] == pytest.approx(0.0310 * 25.4)
-    assert rates["longitudinal_per_min"] == pytest.approx(18.6 * 25.4)
 
 
 def test_spindle_rpm_for_surface_speed_uses_diameter_units():
@@ -274,6 +392,31 @@ def test_tool_offset_is_relative_to_t1_master():
 def test_tool_offset_requires_master_and_tool_touch_off():
     assert tool_offset_for(2, {2: (1040, 1970)}) is None
     assert tool_offset_for(3, {1: (1000, 2000)}) is None
+
+
+def test_tool_x_offset_to_counts_respects_units_diameter_mode_and_sign():
+    assert tool_x_offset_to_counts(0.5, diameter_mode=True) == 6350
+    assert tool_x_offset_to_counts(-25.4, metric=True) == -25400
+    assert tool_x_offset_to_counts(1.0, linear_error_comp=1.01) == 25149
+
+
+@pytest.mark.parametrize("factor", [0, -1])
+def test_tool_x_offset_to_counts_rejects_invalid_compensation(factor):
+    with pytest.raises(ValueError):
+        tool_x_offset_to_counts(1.0, linear_error_comp=factor)
+
+
+def test_manual_tool_x_offset_is_relative_to_t1_and_preserves_z():
+    positions = {1: (1000, 2000), 2: (1100, 2050)}
+    assert tool_position_with_manual_x_offset(2, -75, positions) == (925, 2050)
+    assert tool_position_with_manual_x_offset(3, 125, positions) == (1125, 2000)
+
+
+def test_manual_tool_x_offset_requires_t1_and_nonmaster_tool():
+    with pytest.raises(ValueError):
+        tool_position_with_manual_x_offset(2, 10, {})
+    with pytest.raises(ValueError):
+        tool_position_with_manual_x_offset(1, 10, {1: (100, 200)})
 
 
 def test_tool_touch_positions_persist(tmp_path):
